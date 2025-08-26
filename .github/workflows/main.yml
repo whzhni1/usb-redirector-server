@@ -89,17 +89,16 @@ jobs:
           BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
           echo "Checking SDK index: $BASE_URL"
 
-          # Try to find SDK filename dynamically (avoid hardcoding gcc version/extension)
           SDK_FILE="$(wget -qO- "$BASE_URL" | grep -oE "openwrt-sdk-${OPENWRT_VERSION}-${{ matrix.target }}-${{ matrix.subtarget }}_[^\"']*\.tar\.(zst|xz)" | head -n1 || true)"
 
           if [ -z "$SDK_FILE" ]; then
             echo "SDK not found for ${{ matrix.target }}/${{ matrix.subtarget }} (arch=${{ matrix.arch }}). Skipping."
-            echo "SKIP=true" >> "$GITHUB_ENV"
+            echo "SKIP=true" | tee -a "$GITHUB_ENV" > /dev/null
             exit 0
           fi
 
           echo "Found SDK file: $SDK_FILE"
-          echo "SDK_URL=${BASE_URL}${SDK_FILE}" >> "$GITHUB_ENV"
+          echo "SDK_URL=${BASE_URL}${SDK_FILE}" | tee -a "$GITHUB_ENV" > /dev/null
 
           wget "${BASE_URL}${SDK_FILE}"
           if echo "$SDK_FILE" | grep -q "\.zst$"; then
@@ -109,7 +108,7 @@ jobs:
           fi
 
           SDK_DIR="$(ls -d openwrt-sdk-*)"
-          echo "SDK_PATH=/tmp/openwrt/${SDK_DIR}" >> "$GITHUB_ENV"
+          echo "SDK_PATH=/tmp/openwrt/${SDK_DIR}" | tee -a "$GITHUB_ENV" > /dev/null
 
       - name: Prepare package
         if: env.SKIP != 'true'
