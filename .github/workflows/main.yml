@@ -80,28 +80,38 @@ jobs:
           path: ${{ env.SDK_PATH }}
           key: sdk-${{ matrix.target }}-${{ matrix.subtarget }}
 
-      - name: Download & Extract SDK (Auto-detect + verify structure)
+      - name: Download & Extract SDK (Auto-detect + skip if missing)
         run: |
           mkdir -p "$SDK_PATH"
           BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
 
           echo "Fetching SDK list from $BASE_URL"
-          SDK_FILE=$(curl -s "$BASE_URL" | grep -oE 'openwrt-sdk-[^"]+\.tar\.zst' | head -n 1 || true)
+          SDK_FILE=$(curl -s "$BASE_URL" | grep -oE 'openwrt-sdk-[^\"]+\.tar\.zst' | head -n 1 || true)
 
           if [ -z "$SDK_FILE" ]; then
             echo "❌ No SDK found for ${{ matrix.arch }} (${{ matrix.target }}/${{ matrix.subtarget }}), skipping..."
-            exit 0
+            exit 1
           fi
 
           echo "✅ Found SDK file: $SDK_FILE"
-          curl -fsSL "${BASE_URL}${SDK_FILE}" -o sdk.tar.zst || { echo "❌ Download failed"; exit 0; }
-
-          tar --use-compress-program=unzstd -xf sdk.tar.zst -C "$SDK_PATH" --strip-components=1 || { echo "❌ Extract failed"; exit 0; }
-
-          if [ ! -f "$SDK_PATH/scripts/feeds" ]; then
-            echo "❌ SDK structure invalid (missing scripts/feeds), skipping..."
-            exit 0
+          cd "$SDK_PATH"
+          curl -sSL "${BASE_URL}${SDK_FILE}" -o sdk.tar.zst
+          
+          # Clear directory before extraction to prevent conflicts
+          rm -rf * || true
+          
+          # Extract SDK with verbose output
+          tar --use-compress-program=unzstd -xvf sdk.tar.zst --strip-components=1
+          
+          # Verify extraction and make scripts executable
+          if [ ! -d "scripts" ] || [ ! -f "scripts/feeds" ]; then
+            echo "❌ SDK extraction failed or critical files are missing"
+            ls -la
+            exit 1
           fi
+          
+          chmod +x scripts/feeds
+          echo "✅ SDK extracted successfully"
 
       - name: Cache dl & toolchain
         uses: actions/cache@v4
@@ -119,6 +129,7 @@ jobs:
           mkdir -p package/${PACKAGE_NAME}
           rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
           make defconfig
+
       - name: Build package
         run: |
           cd "$SDK_PATH"
