@@ -1,90 +1,66 @@
-name: OpenWrt Multi-Arch Build
+name: Build OpenWrt Package
 
 on:
   workflow_dispatch:
 
+env:
+  PACKAGE_NAME: usb-redirector-server
+  CACHE_DIR: openwrt-dl-cache
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x86_64
-            target: x86
-            subtarget: 64
-          - arch: aarch64
-            target: armvirt
-            subtarget: 64
-          - arch: mipsel_24kc
-            target: ramips
-            subtarget: mt7621
-
-    env:
-      OPENWRT_VERSION: 23.05.3
-      SDK_PATH: /tmp/sdk
+        sdk: 
+          - https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          - https://downloads.openwrt.org/releases/23.05.5/targets/ramips/mt7621/openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          - https://downloads.openwrt.org/releases/23.05.5/targets/armvirt/64/openwrt-sdk-23.05.5-armvirt-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Download & Extract SDK (verify structure)
+      - name: Restore dl cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: dl-${{ hashFiles('**/feeds.conf.default') }}
+          restore-keys: |
+            dl-
+
+      - name: Download and extract SDK
         run: |
           set -e
-          mkdir -p "$SDK_PATH"
-          BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
+          SDK_URL="${{ matrix.sdk }}"
+          SDK_FILE=$(basename "$SDK_URL")
+          mkdir -p "$CACHE_DIR"
+          wget -t 3 -c "$SDK_URL" -P .
+          tar -xJf "$SDK_FILE"
+          rm -f "$SDK_FILE"
+          SDK_PATH=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*")
+          echo "SDK_PATH=$SDK_PATH" >> $GITHUB_ENV
+          ln -sf "$GITHUB_WORKSPACE/$CACHE_DIR" "$SDK_PATH/dl"
 
-          echo "📡 Fetching SDK list from $BASE_URL"
-          SDK_FILE=$(curl -s "$BASE_URL" | grep -oE 'openwrt-sdk-[^"]+\.tar\.(zst|xz)' | head -n 1 || true)
-
-          if [ -z "$SDK_FILE" ]; then
-            echo "❌ No SDK found for ${{ matrix.arch }} (${{ matrix.target }}/${{ matrix.subtarget }}), skipping..."
-            exit 0
-          fi
-
-          echo "✅ Found SDK file: $SDK_FILE"
-          curl -fsSL "${BASE_URL}${SDK_FILE}" -o sdk.tar || { echo "❌ Download failed"; exit 0; }
-
-          TMPDIR=$(mktemp -d)
-          if [[ "$SDK_FILE" == *.zst ]]; then
-            tar --use-compress-program=unzstd -xf sdk.tar -C "$TMPDIR"
-          else
-            tar -xf sdk.tar -C "$TMPDIR"
-          fi
-
-          SDK_DIR=$(find "$TMPDIR" -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n1)
-          if [ -z "$SDK_DIR" ] || [ ! -f "$SDK_DIR/scripts/feeds" ]; then
-            echo "❌ SDK structure invalid (missing scripts/feeds), skipping..."
-            exit 0
-          fi
-
-          rm -rf "$SDK_PATH"
-          mv "$SDK_DIR" "$SDK_PATH"
-
-      - name: Update Feeds
+      - name: Prepare package
         run: |
           cd "$SDK_PATH"
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          # 只安装当前包和它依赖的公共包，避免 telephony 大包报错
+          ./scripts/feeds install $PACKAGE_NAME
+          ./scripts/feeds install -a -p packages
+          mkdir -p package/$PACKAGE_NAME
+          rsync -a --delete "$GITHUB_WORKSPACE"/ package/$PACKAGE_NAME/
+          make defconfig
 
-      - name: Copy Custom Package
-        run: |
-          mkdir -p "$SDK_PATH/package/custom"
-          cp -r ./my-custom-package "$SDK_PATH/package/custom/"
-
-      - name: Build Package
+      - name: Build package
         run: |
           cd "$SDK_PATH"
-          make defconfig
-          make package/custom/compile -j$(nproc) V=sc || true
+          make package/$PACKAGE_NAME/{clean,compile} V=s
 
-      - name: Collect ipk
-        run: |
-          mkdir -p artifacts/${{ matrix.arch }}
-          find "$SDK_PATH/bin/packages" -name "*.ipk" -exec cp {} artifacts/${{ matrix.arch }}/ \;
-
-      - name: Upload Artifact
+      - name: Upload ipk
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.arch }}-ipks
-          path: artifacts/${{ matrix.arch }}
+          name: ${{ env.PACKAGE_NAME }}-${{ matrix.sdk }}
+          path: ${{ env.SDK_PATH }}/bin/packages/**/${{ env.PACKAGE_NAME }}_*.ipk
