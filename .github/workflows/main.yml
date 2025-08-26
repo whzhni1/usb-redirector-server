@@ -1,58 +1,48 @@
-name: Build OpenWrt USB Redirector Server
+name: OpenWrt Multi-Arch Build
 
 on:
   workflow_dispatch:
 
-env:
-  OPENWRT_VERSION: 23.05.5
-  PACKAGE_NAME: usb-redirector-server
-  SDK_PATH: /tmp/openwrt
-
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64-gnu
+          - arch: x86_64
             target: x86
             subtarget: 64
-          - arch: armvirt-64
+          - arch: aarch64
             target: armvirt
             subtarget: 64
-          # 按需追加你的架构...
+          - arch: mipsel_24kc
+            target: ramips
+            subtarget: mt7621
+
+    env:
+      OPENWRT_VERSION: 23.05.3
+      SDK_PATH: /tmp/sdk
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
-            python3 python3-distutils rsync unzip zlib1g-dev file wget zstd curl
-
-      - name: Cache SDK
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.SDK_PATH }}
-          key: sdk-${{ matrix.target }}-${{ matrix.subtarget }}
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Download & Extract SDK (verify structure)
         run: |
+          set -e
           mkdir -p "$SDK_PATH"
           BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
-          echo "Fetching SDK list from $BASE_URL"
 
+          echo "📡 Fetching SDK list from $BASE_URL"
           SDK_FILE=$(curl -s "$BASE_URL" | grep -oE 'openwrt-sdk-[^"]+\.tar\.(zst|xz)' | head -n 1 || true)
 
           if [ -z "$SDK_FILE" ]; then
-            echo "❌ No SDK found for ${{ matrix.arch }} -> skipping"
+            echo "❌ No SDK found for ${{ matrix.arch }} (${{ matrix.target }}/${{ matrix.subtarget }}), skipping..."
             exit 0
           fi
 
-          echo "✅ Found: $SDK_FILE"
+          echo "✅ Found SDK file: $SDK_FILE"
           curl -fsSL "${BASE_URL}${SDK_FILE}" -o sdk.tar || { echo "❌ Download failed"; exit 0; }
 
           TMPDIR=$(mktemp -d)
@@ -64,40 +54,37 @@ jobs:
 
           SDK_DIR=$(find "$TMPDIR" -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n1)
           if [ -z "$SDK_DIR" ] || [ ! -f "$SDK_DIR/scripts/feeds" ]; then
-            echo "❌ SDK structure invalid, skipping"
+            echo "❌ SDK structure invalid (missing scripts/feeds), skipping..."
             exit 0
           fi
 
           rm -rf "$SDK_PATH"
           mv "$SDK_DIR" "$SDK_PATH"
 
-      - name: Cache dl & toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.SDK_PATH }}/dl
-            ${{ env.SDK_PATH }}/staging_dir/toolchain-*
-          key: dl-toolchain-${{ matrix.target }}-${{ matrix.subtarget }}
-
-      - name: Prepare package
+      - name: Update Feeds
         run: |
           cd "$SDK_PATH"
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          mkdir -p package/${PACKAGE_NAME}
-          rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
-          make defconfig
 
-      - name: Build package
+      - name: Copy Custom Package
+        run: |
+          mkdir -p "$SDK_PATH/package/custom"
+          cp -r ./my-custom-package "$SDK_PATH/package/custom/"
+
+      - name: Build Package
         run: |
           cd "$SDK_PATH"
-          make package/${PACKAGE_NAME}/clean
-          make package/${PACKAGE_NAME}/compile V=s
+          make defconfig
+          make package/custom/compile -j$(nproc) V=sc || true
 
-      - name: Upload to Artifact
+      - name: Collect ipk
+        run: |
+          mkdir -p artifacts/${{ matrix.arch }}
+          find "$SDK_PATH/bin/packages" -name "*.ipk" -exec cp {} artifacts/${{ matrix.arch }}/ \;
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.arch }}-ipk
-          path: |
-            ${{ env.SDK_PATH }}/bin/packages/**/${{ env.PACKAGE_NAME }}_*.ipk
-            ${{ env.SDK_PATH }}/bin/packages/**/kmod-${{ env.PACKAGE_NAME }}_*.ipk
+          name: ${{ matrix.arch }}-ipks
+          path: artifacts/${{ matrix.arch }}
