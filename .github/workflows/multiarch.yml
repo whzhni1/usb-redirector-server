@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 env:
-  OPENWRT_BRANCH: openwrt-22.03
+  OPENWRT_BRANCH: openwrt-23.05.5
 
 jobs:
   build:
@@ -39,7 +39,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Cache downloads and ccache
         uses: actions/cache@v4
