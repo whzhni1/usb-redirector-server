@@ -80,19 +80,21 @@ jobs:
           path: ${{ env.SDK_PATH }}
           key: sdk-${{ matrix.target }}-${{ matrix.subtarget }}
 
-      - name: Download & Extract SDK (Skip if 404)
+      - name: Download & Extract SDK (Auto-detect + skip if missing)
         run: |
           mkdir -p "$SDK_PATH"
-          SDK_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/openwrt-sdk-${OPENWRT_VERSION}-${{ matrix.target }}-${{ matrix.subtarget }}_gcc-12.3.0_musl.Linux-x86_64.tar.zst"
+          BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
 
-          echo "Checking SDK URL: $SDK_URL"
-          if ! curl -sfI "$SDK_URL" > /dev/null; then
-            echo "❌ SDK not found for ${{ matrix.arch }} (${{ matrix.target }}/${{ matrix.subtarget }}), skipping..."
+          echo "Fetching SDK list from $BASE_URL"
+          SDK_FILE=$(curl -s "$BASE_URL" | grep -oE 'openwrt-sdk-[^"]+\.tar\.zst' | head -n 1 || true)
+
+          if [ -z "$SDK_FILE" ]; then
+            echo "❌ No SDK found for ${{ matrix.arch }} (${{ matrix.target }}/${{ matrix.subtarget }}), skipping..."
             exit 0
           fi
 
-          echo "✅ SDK found, downloading..."
-          curl -sSL "$SDK_URL" -o sdk.tar.zst
+          echo "✅ Found SDK file: $SDK_FILE"
+          curl -sSL "${BASE_URL}${SDK_FILE}" -o sdk.tar.zst
           tar --use-compress-program=unzstd -xf sdk.tar.zst --strip-components=1 -C "$SDK_PATH"
 
       - name: Cache dl & toolchain
