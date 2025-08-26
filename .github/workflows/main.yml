@@ -1,1 +1,127 @@
-aa
+name: Build USB Redirector Server IPK for Multiple Architectures
+
+on:
+  push:
+    tags: ['v*']  # 在创建版本标签时触发
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  REPO_URL: https://github.com/whzhni1/usb-redirector-server
+  BUILD_DIR: ${{ github.workspace }}/build
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64, i386, arm64, arm, mips, mipsel, mips64, mips64el]
+    
+    name: Build for ${{ matrix.arch }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Set up build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libncurses5-dev gawk git libssl-dev gettext \
+          zlib1g-dev swig unzip time python3 python3-setuptools python3-yaml
+
+    - name: Setup OpenWrt SDK for ${{ matrix.arch }}
+      run: |
+        # 这里需要根据实际架构下载对应的OpenWrt SDK
+        # 由于不同架构需要不同的SDK，这里需要根据矩阵中的架构变量来下载对应的SDK
+        # 实际URL需要根据OpenWrt版本和架构确定
+        SDK_URL=""
+        case "${{ matrix.arch }}" in
+          "x86_64")
+            SDK_URL="https://downloads.openwrt.org/releases/21.02.2/targets/x86/64/openwrt-sdk-21.02.2-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+            ;;
+          "i386")
+            SDK_URL="https://downloads.openwrt.org/releases/21.02.2/targets/x86/generic/openwrt-sdk-21.02.2-x86-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+            ;;
+          "arm64")
+            SDK_URL="https://downloads.openwrt.org/releases/21.02.2/targets/armvirt/64/openwrt-sdk-21.02.2-armvirt-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+            ;;
+          "arm")
+            SDK_URL="https://downloads.openwrt.org/releases/21.02.2/targets/armvirt/32/openwrt-sdk-21.02.2-armvirt-32_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+            ;;
+          "mips")
+            SDK_URL="https://downloads.openwrt.org/releases/21.02.2/targets/malta/be/openwrt-sdk-21.02.2-malta-be_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+            ;;
+          "mipsel")
+            SDK_URL="https://downloads.openwrt.org/releases/21.02.2/targets/malta/le/openwrt-sdk-21.02.2-malta-le_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+            ;;
+          "mips64")
+            SDK_URL="https://downloads.openwrt.org/releases/21.02.2/targets/malta/be64/openwrt-sdk-21.02.2-malta-be64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+            ;;
+          "mips64el")
+            SDK_URL="https://downloads.openwrt.org/releases/21.02.2/targets/malta/le64/openwrt-sdk-21.02.2-malta-le64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+            ;;
+        esac
+        
+        mkdir -p $BUILD_DIR
+        cd $BUILD_DIR
+        wget $SDK_URL -O sdk.tar.xz
+        tar -xf sdk.tar.xz
+        rm sdk.tar.xz
+        SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk*" | head -n 1)
+        echo "SDK_DIR=$BUILD_DIR/$SDK_DIR" >> $GITHUB_ENV
+
+    - name: Prepare package source
+      run: |
+        cd $BUILD_DIR
+        git clone $REPO_URL usb-redirector-source
+        cp -r usb-redirector-source/usb-redirector-server $SDK_DIR/package/
+        cp -r usb-redirector-source/kmod-usb-redirector-server $SDK_DIR/package/
+
+    - name: Build packages for ${{ matrix.arch }}
+      run: |
+        cd $SDK_DIR
+        # 更新feeds
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        # 配置编译选项
+        echo "CONFIG_TARGET_${{ matrix.arch }}=y" > .config
+        echo "CONFIG_PACKAGE_usb-redirector-server=m" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-redirector-server=m" >> .config
+        
+        make defconfig
+        make package/usb-redirector-server/compile -j$(nproc)
+        make package/kmod-usb-redirector-server/compile -j$(nproc)
+
+    - name: Collect IPK files
+      run: |
+        cd $SDK_DIR
+        mkdir -p ${{ github.workspace }}/output/${{ matrix.arch }}
+        find bin -name "*usb-redirector-server*.ipk" -exec cp {} ${{ github.workspace }}/output/${{ matrix.arch }} \;
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ipk-${{ matrix.arch }}
+        path: ${{ github.workspace }}/output/${{ matrix.arch }}/*.ipk
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ${{ github.workspace }}/artifacts
+
+    - name: List files for debugging
+      run: ls -R ${{ github.workspace }}/artifacts
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ github.workspace }}/artifacts/**/*.ipk
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
