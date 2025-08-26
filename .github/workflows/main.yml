@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       openwrt_branch:
-        description: 'OpenWrt branch or tag (e.g. v23.05.3, openwrt-23.05)'
+        description: 'OpenWrt branch or tag'
         default: 'v23.05.3'
       target:
-        description: 'OpenWrt TARGET (e.g. aarch64, rockchip, mediatek, ipq807x)'
+        description: 'OpenWrt TARGET'
         default: 'aarch64'
       subtarget:
-        description: 'OpenWrt SUBTARGET (e.g. generic, cortexa53, filogic)'
+        description: 'OpenWrt SUBTARGET'
         default: 'generic'
   push:
   pull_request:
@@ -56,7 +56,7 @@ jobs:
         run: |
           mkdir -p openwrt/package/usb-redirector-server
           rsync -a --delete ./ openwrt/package/usb-redirector-server/ \
-            --exclude .git --exclude .github
+            --exclude .git --exclude .github --exclude openwrt
 
       - name: Prepare feeds
         working-directory: openwrt
