@@ -1,66 +1,48 @@
-name: Build OpenWrt Package
+name: Build USB Redirector Packages
 
 on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
-
-env:
-  PACKAGE_NAME: usb-redirector-server
-  CACHE_DIR: openwrt-dl-cache
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        sdk: 
-          - https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          - https://downloads.openwrt.org/releases/23.05.5/targets/ramips/mt7621/openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          - https://downloads.openwrt.org/releases/23.05.5/targets/armvirt/64/openwrt-sdk-23.05.5-armvirt-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-
+    runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v3
+      with:
+        path: package/usb-redirector-server
 
-      - name: Restore dl cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CACHE_DIR }}
-          key: dl-${{ hashFiles('**/feeds.conf.default') }}
-          restore-keys: |
-            dl-
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+        gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget
 
-      - name: Download and extract SDK
-        run: |
-          set -e
-          SDK_URL="${{ matrix.sdk }}"
-          SDK_FILE=$(basename "$SDK_URL")
-          mkdir -p "$CACHE_DIR"
-          wget -t 3 -c "$SDK_URL" -P .
-          tar -xJf "$SDK_FILE"
-          rm -f "$SDK_FILE"
-          SDK_PATH=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*")
-          echo "SDK_PATH=$SDK_PATH" >> $GITHUB_ENV
-          ln -sf "$GITHUB_WORKSPACE/$CACHE_DIR" "$SDK_PATH/dl"
+    - name: Download OpenWrt SDK
+      run: |
+        wget https://downloads.openwrt.org/releases/23.05.0/targets/armvirt/64/openwrt-sdk-23.05.0-armvirt-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+        tar xf openwrt-sdk-23.05.0-armvirt-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+        mv openwrt-sdk-* openwrt-sdk
 
-      - name: Prepare package
-        run: |
-          cd "$SDK_PATH"
-          ./scripts/feeds update -a
-          # 只安装当前包和它依赖的公共包，避免 telephony 大包报错
-          ./scripts/feeds install $PACKAGE_NAME
-          ./scripts/feeds install -a -p packages
-          mkdir -p package/$PACKAGE_NAME
-          rsync -a --delete "$GITHUB_WORKSPACE"/ package/$PACKAGE_NAME/
-          make defconfig
+    - name: Configure and Build
+      run: |
+        cd openwrt-sdk
+        echo "CONFIG_TARGET_armvirt=y" > .config
+        echo "CONFIG_TARGET_armvirt_64=y" >> .config
+        echo "CONFIG_TARGET_armvirt_64_Default=y" >> .config
+        echo "CONFIG_PACKAGE_usb-redirector-server=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-redirector-server=y" >> .config
+        make defconfig
+        make package/usb-redirector-server/compile V=s
 
-      - name: Build package
-        run: |
-          cd "$SDK_PATH"
-          make package/$PACKAGE_NAME/{clean,compile} V=s
-
-      - name: Upload ipk
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PACKAGE_NAME }}-${{ matrix.sdk }}
-          path: ${{ env.SDK_PATH }}/bin/packages/**/${{ env.PACKAGE_NAME }}_*.ipk
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: usb-redirector-packages
+        path: |
+          openwrt-sdk/bin/packages/aarch64_generic/base/usb-redirector-server-*.ipk
+          openwrt-sdk/bin/packages/aarch64_generic/base/kmod-usb-redirector-server-*.ipk
