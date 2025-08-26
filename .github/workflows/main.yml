@@ -72,8 +72,8 @@ jobs:
 
       - name: Setup OpenWrt SDK dependencies
         run: |
-          sudo apt-get update
-          # 兼容 Ubuntu 20.04/22.04/24.04
+          sudo apt-get update -y
+          # 检测并安装合适的 Python distutils/stdlib-extensions
           if apt-cache show python3-distutils >/dev/null 2>&1; then
             PY_DIST="python3-distutils"
           else
