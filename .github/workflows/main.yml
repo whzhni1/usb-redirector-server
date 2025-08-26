@@ -36,7 +36,7 @@ jobs:
             gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
             python3 python3-distutils rsync unzip zlib1g-dev file wget
 
-      # 缓存 SDK 解压后的内容 & dl & toolchain
+      # 缓存 SDK 解压结果
       - name: Cache SDK
         uses: actions/cache@v4
         with:
@@ -53,6 +53,7 @@ jobs:
           wget -q "${{ matrix.sdk }}" -O sdk.tar.xz
           tar -xJf sdk.tar.xz --strip-components=1 -C "$SDK_PATH"
 
+      # 缓存 dl & 工具链
       - name: Cache dl & toolchain
         uses: actions/cache@v4
         with:
