@@ -1,1 +1,65 @@
 
+name: Build OpenWrt USB Redirector Server
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        arch:
+          # ARM架构
+          - arm_cortex-a7
+          - arm_cortex-a9
+          - aarch64_cortex-a53
+          - aarch64_cortex-a72
+          - aarch64_generic
+          - arm_cortex-a15_neon-vfpv4
+          # MIPS架构
+          - mips_24kc
+          - mipsel_24kc
+          - mips64_octeonplus
+          # x86架构
+          - x86_64
+          - i386_pentium4
+          # 其他架构
+          - powerpc_464fp
+          - powerpc_8540
+          - aarch64_generic-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OpenWrt SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
+          gettext git java-propose-classpath libelf-dev libncurses5-dev \
+          libncursesw5-dev libssl-dev python python2.7-dev python3 unzip wget \
+          python3-distutils python3-setuptools python3-dev rsync subversion \
+          swig time xsltproc zlib1g-dev
+
+      - name: Build USB Redirector Server
+        run: |
+          make clean
+          make ARCH=${{ matrix.arch }} all
+
+      - name: Upload IPK files
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            bin/${{ matrix.arch }}/usb-redirector-server_*.ipk
+            bin/${{ matrix.arch }}/kmod-usb-redirector-server_*.ipk
+          tag_name: v${{ github.run_number }}-${{ matrix.arch }}
+          name: Release ${{ github.run_number }} for ${{ matrix.arch }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
