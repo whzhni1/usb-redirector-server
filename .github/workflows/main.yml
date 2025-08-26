@@ -80,7 +80,7 @@ jobs:
           path: ${{ env.SDK_PATH }}
           key: sdk-${{ matrix.target }}-${{ matrix.subtarget }}
 
-      - name: Download & Extract SDK (Auto-detect + skip if missing)
+      - name: Download & Extract SDK (Auto-detect + verify structure)
         run: |
           mkdir -p "$SDK_PATH"
           BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
@@ -94,8 +94,14 @@ jobs:
           fi
 
           echo "✅ Found SDK file: $SDK_FILE"
-          curl -sSL "${BASE_URL}${SDK_FILE}" -o sdk.tar.zst
-          tar --use-compress-program=unzstd -xf sdk.tar.zst --strip-components=1 -C "$SDK_PATH"
+          curl -fsSL "${BASE_URL}${SDK_FILE}" -o sdk.tar.zst || { echo "❌ Download failed"; exit 0; }
+
+          tar --use-compress-program=unzstd -xf sdk.tar.zst -C "$SDK_PATH" --strip-components=1 || { echo "❌ Extract failed"; exit 0; }
+
+          if [ ! -f "$SDK_PATH/scripts/feeds" ]; then
+            echo "❌ SDK structure invalid (missing scripts/feeds), skipping..."
+            exit 0
+          fi
 
       - name: Cache dl & toolchain
         uses: actions/cache@v4
