@@ -15,8 +15,8 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-  matrix:
-    include:
+     matrix:
+      include:
       - arch: arm_cortex-a7
         target: armvirt
         subtarget: 32
