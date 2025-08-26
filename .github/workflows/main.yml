@@ -8,7 +8,8 @@ on:
   workflow_dispatch:
 
 env:
-  OPENWRT_VERSION: 24.10.2
+  OPENWRT_VERSION: 23.05.5
+  PACKAGE_NAME: usb-redirector-server
 
 jobs:
   build:
@@ -17,40 +18,43 @@ jobs:
     strategy:
       matrix:
         include:
-          # ARM 架构
+          # ARM
           - arch: arm_cortex-a7
-            target: armvirt
-            subtarget: 32
+            target: ipq40xx
+            subtarget: generic
           - arch: arm_cortex-a9
-            target: armvirt
-            subtarget: 32
+            target: mvebu
+            subtarget: cortexa9
           - arch: aarch64_cortex-a53
-            target: armvirt
-            subtarget: 64
+            target: mediatek
+            subtarget: filogic
           - arch: aarch64_cortex-a72
-            target: armvirt
-            subtarget: 64
+            target: bcm27xx
+            subtarget: bcm2711
           - arch: aarch64_generic
-            target: armvirt
-            subtarget: 64
-          # MIPS 架构
+            target: rockchip
+            subtarget: armv8
+          - arch: arm_cortex-a15_neon-vfpv4
+            target: ipq806x
+            subtarget: generic
+          # MIPS
           - arch: mips_24kc
             target: ath79
             subtarget: generic
           - arch: mipsel_24kc
             target: ramips
-            subtarget: rt305x
+            subtarget: mt7621
           - arch: mips64_octeonplus
             target: octeon
             subtarget: generic
-          # x86 架构
+          # x86
           - arch: x86_64
             target: x86
             subtarget: 64
           - arch: i386_pentium4
             target: x86
             subtarget: generic
-          # PowerPC 架构
+          # PowerPC
           - arch: powerpc_464fp
             target: mpc85xx
             subtarget: p1020
@@ -62,52 +66,90 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
       - name: Setup OpenWrt SDK dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
-          gettext git java-propose-classpath libelf-dev libncurses5-dev \
-          libncursesw5-dev libssl-dev python3 unzip wget \
-          python3-pip python3-setuptools python3-dev rsync subversion \
-          swig time xsltproc zlib1g-dev
+          sudo apt-get install -y \
+            build-essential ccache ecj fastjar file g++ gawk gettext git \
+            java-propose-classpath libelf-dev libncurses5-dev libncursesw5-dev \
+            libssl-dev python3 unzip wget python3-pip python3-setuptools \
+            python3-dev rsync subversion swig time xsltproc zlib1g-dev zstd
 
-      - name: Download OpenWrt SDK
+      - name: Download OpenWrt SDK (with existence check)
+        id: sdk
         run: |
+          set -e
           mkdir -p /tmp/openwrt
           cd /tmp/openwrt
-          SDK_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/openwrt-sdk-${OPENWRT_VERSION}-${{ matrix.target }}-${{ matrix.subtarget }}_gcc-12.3.0_musl.Linux-x86_64.tar.zst"
-          echo "Downloading SDK: $SDK_URL"
-          wget $SDK_URL
-          tar --use-compress-program=unzstd -xf openwrt-sdk-*.tar.zst
-          SDK_DIR=$(ls -d openwrt-sdk-*)
-          echo "SDK_PATH=/tmp/openwrt/$SDK_DIR" >> $GITHUB_ENV
+
+          BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
+          echo "Checking SDK index: $BASE_URL"
+
+          # Try to find SDK filename dynamically (avoid hardcoding gcc version/extension)
+          SDK_FILE="$(wget -qO- "$BASE_URL" | grep -oE "openwrt-sdk-${OPENWRT_VERSION}-${{ matrix.target }}-${{ matrix.subtarget }}_[^\"']*\.tar\.(zst|xz)" | head -n1 || true)"
+
+          if [ -z "$SDK_FILE" ]; then
+            echo "SDK not found for ${{ matrix.target }}/${{ matrix.subtarget }} (arch=${{ matrix.arch }}). Skipping."
+            echo "SKIP=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "Found SDK file: $SDK_FILE"
+          echo "SDK_URL=${BASE_URL}${SDK_FILE}" >> "$GITHUB_ENV"
+
+          wget "${BASE_URL}${SDK_FILE}"
+          if echo "$SDK_FILE" | grep -q "\.zst$"; then
+            tar --use-compress-program=unzstd -xf "$SDK_FILE"
+          else
+            tar -xf "$SDK_FILE"
+          fi
+
+          SDK_DIR="$(ls -d openwrt-sdk-*)"
+          echo "SDK_PATH=/tmp/openwrt/${SDK_DIR}" >> "$GITHUB_ENV"
 
       - name: Prepare package
+        if: env.SKIP != 'true'
         run: |
-          cd $SDK_PATH
+          cd "$SDK_PATH"
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          mkdir -p package/usb-redirector-server
-          cp -r $GITHUB_WORKSPACE/* package/usb-redirector-server/
+          mkdir -p package/${PACKAGE_NAME}
+          rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
 
-      - name: Build USB Redirector Server
+      - name: Build package
+        if: env.SKIP != 'true'
         run: |
-          cd $SDK_PATH
-          make package/usb-redirector-server/compile V=s
+          cd "$SDK_PATH"
+          make package/${PACKAGE_NAME}/clean
+          make package/${PACKAGE_NAME}/compile V=s
 
-      - name: Upload IPK files
-        if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v1
+      - name: List built IPKs
+        if: env.SKIP != 'true'
+        run: |
+          echo "Listing IPKs under: $SDK_PATH/bin"
+          find "$SDK_PATH/bin" -type f -name "*.ipk" -print
+
+      - name: Upload IPK files to release
+        if: env.SKIP != 'true' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
         with:
           files: |
-            $(find $SDK_PATH/bin/packages -name "usb-redirector-server_*.ipk")
-            $(find $SDK_PATH/bin/packages -name "kmod-usb-redirector-server_*.ipk")
+            ${{ env.SDK_PATH }}/bin/packages/**/*.ipk
           tag_name: v${{ github.run_number }}-${{ matrix.arch }}
           name: Release ${{ github.run_number }} for ${{ matrix.arch }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload IPK files as artifact
+        if: env.SKIP != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-${{ matrix.arch }}
+          path: |
+            ${{ env.SDK_PATH }}/bin/packages/**/*.ipk
+          if-no-files-found: warn
