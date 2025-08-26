@@ -15,45 +15,48 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-     matrix:
-      include:
-      - arch: arm_cortex-a7
-        target: armvirt
-        subtarget: 32
-      - arch: arm_cortex-a9
-        target: armvirt
-        subtarget: 32
-      - arch: aarch64_cortex-a53
-        target: armvirt
-        subtarget: 64
-      - arch: aarch64_cortex-a72
-        target: armvirt
-        subtarget: 64
-      - arch: aarch64_generic
-        target: armvirt
-        subtarget: 64
-      - arch: mips_24kc
-        target: ath79
-        subtarget: generic
-      - arch: mipsel_24kc
-        target: ramips
-        subtarget: rt305x
-      - arch: mips64_octeonplus
-        target: octeon
-        subtarget: generic
-      - arch: x86_64
-        target: x86
-        subtarget: 64
-      - arch: i386_pentium4
-        target: x86
-        subtarget: generic
-      - arch: powerpc_464fp
-        target: mpc85xx
-        subtarget: p1020
-      - arch: powerpc_8540
-        target: mpc85xx
-        subtarget: generic
-
+      matrix:
+        include:
+          # ARM 架构
+          - arch: arm_cortex-a7
+            target: armvirt
+            subtarget: 32
+          - arch: arm_cortex-a9
+            target: armvirt
+            subtarget: 32
+          - arch: aarch64_cortex-a53
+            target: armvirt
+            subtarget: 64
+          - arch: aarch64_cortex-a72
+            target: armvirt
+            subtarget: 64
+          - arch: aarch64_generic
+            target: armvirt
+            subtarget: 64
+          # MIPS 架构
+          - arch: mips_24kc
+            target: ath79
+            subtarget: generic
+          - arch: mipsel_24kc
+            target: ramips
+            subtarget: rt305x
+          - arch: mips64_octeonplus
+            target: octeon
+            subtarget: generic
+          # x86 架构
+          - arch: x86_64
+            target: x86
+            subtarget: 64
+          - arch: i386_pentium4
+            target: x86
+            subtarget: generic
+          # PowerPC 架构
+          - arch: powerpc_464fp
+            target: mpc85xx
+            subtarget: p1020
+          - arch: powerpc_8540
+            target: mpc85xx
+            subtarget: generic
 
     steps:
       - uses: actions/checkout@v4
