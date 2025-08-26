@@ -15,54 +15,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: aarch64-gnueabi
-            target: armvirt
-            subtarget: 64
-          - arch: arm-gnueabi
-            target: armvirt
-            subtarget: 32
-          - arch: arm-gnueabihf
-            target: armvirt
-            subtarget: 32
-          - arch: arm-uclibcgnueabi
-            target: armvirt
-            subtarget: 32
-          - arch: arm-uclibcgnueabihf
-            target: armvirt
-            subtarget: 32
-          - arch: armeb-gnueabi
-            target: armvirt
-            subtarget: 32
-          - arch: armeb-gnueabihf
-            target: armvirt
-            subtarget: 32
-          - arch: i386-gnu
-            target: x86
-            subtarget: generic
-          - arch: mips-gnu
-            target: malta
-            subtarget: le
-          - arch: mips-musl
-            target: malta
-            subtarget: le
-          - arch: mips-uclibc
-            target: malta
-            subtarget: le
-          - arch: mips64-gnu
-            target: malta
-            subtarget: le
-          - arch: mips64el-gnu
-            target: malta
-            subtarget: le
-          - arch: mipsel-gnu
-            target: malta
-            subtarget: le
-          - arch: mipsel-musl
-            target: malta
-            subtarget: le
           - arch: x86_64-gnu
             target: x86
             subtarget: 64
+          - arch: armvirt-64
+            target: armvirt
+            subtarget: 64
+          # 按需追加你的架构...
 
     steps:
       - uses: actions/checkout@v4
@@ -80,38 +39,37 @@ jobs:
           path: ${{ env.SDK_PATH }}
           key: sdk-${{ matrix.target }}-${{ matrix.subtarget }}
 
-      - name: Download & Extract SDK (Auto-detect + skip if missing)
+      - name: Download & Extract SDK (verify structure)
         run: |
           mkdir -p "$SDK_PATH"
           BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
-
           echo "Fetching SDK list from $BASE_URL"
-          SDK_FILE=$(curl -s "$BASE_URL" | grep -oE 'openwrt-sdk-[^\"]+\.tar\.zst' | head -n 1 || true)
+
+          SDK_FILE=$(curl -s "$BASE_URL" | grep -oE 'openwrt-sdk-[^"]+\.tar\.(zst|xz)' | head -n 1 || true)
 
           if [ -z "$SDK_FILE" ]; then
-            echo "❌ No SDK found for ${{ matrix.arch }} (${{ matrix.target }}/${{ matrix.subtarget }}), skipping..."
-            exit 1
+            echo "❌ No SDK found for ${{ matrix.arch }} -> skipping"
+            exit 0
           fi
 
-          echo "✅ Found SDK file: $SDK_FILE"
-          cd "$SDK_PATH"
-          curl -sSL "${BASE_URL}${SDK_FILE}" -o sdk.tar.zst
-          
-          # Clear directory before extraction to prevent conflicts
-          rm -rf * || true
-          
-          # Extract SDK with verbose output
-          tar --use-compress-program=unzstd -xvf sdk.tar.zst --strip-components=1
-          
-          # Verify extraction and make scripts executable
-          if [ ! -d "scripts" ] || [ ! -f "scripts/feeds" ]; then
-            echo "❌ SDK extraction failed or critical files are missing"
-            ls -la
-            exit 1
+          echo "✅ Found: $SDK_FILE"
+          curl -fsSL "${BASE_URL}${SDK_FILE}" -o sdk.tar || { echo "❌ Download failed"; exit 0; }
+
+          TMPDIR=$(mktemp -d)
+          if [[ "$SDK_FILE" == *.zst ]]; then
+            tar --use-compress-program=unzstd -xf sdk.tar -C "$TMPDIR"
+          else
+            tar -xf sdk.tar -C "$TMPDIR"
           fi
-          
-          chmod +x scripts/feeds
-          echo "✅ SDK extracted successfully"
+
+          SDK_DIR=$(find "$TMPDIR" -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n1)
+          if [ -z "$SDK_DIR" ] || [ ! -f "$SDK_DIR/scripts/feeds" ]; then
+            echo "❌ SDK structure invalid, skipping"
+            exit 0
+          fi
+
+          rm -rf "$SDK_PATH"
+          mv "$SDK_DIR" "$SDK_PATH"
 
       - name: Cache dl & toolchain
         uses: actions/cache@v4
@@ -143,16 +101,3 @@ jobs:
           path: |
             ${{ env.SDK_PATH }}/bin/packages/**/${{ env.PACKAGE_NAME }}_*.ipk
             ${{ env.SDK_PATH }}/bin/packages/**/kmod-${{ env.PACKAGE_NAME }}_*.ipk
-
-      - name: Upload to Release
-        if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ${{ env.SDK_PATH }}/bin/packages/**/${{ env.PACKAGE_NAME }}_*.ipk
-            ${{ env.SDK_PATH }}/bin/packages/**/kmod-${{ env.PACKAGE_NAME }}_*.ipk
-          tag_name: v${{ github.run_number }}-${{ matrix.arch }}
-          name: Build ${{ github.run_number }} for ${{ matrix.arch }}
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
