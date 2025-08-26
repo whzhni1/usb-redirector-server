@@ -5,15 +5,12 @@ on:
     inputs:
       openwrt_branch:
         description: 'OpenWrt branch or tag (e.g. v23.05.3, openwrt-23.05)'
-        required: false
         default: 'v23.05.3'
       target:
         description: 'OpenWrt TARGET (e.g. aarch64, rockchip, mediatek, ipq807x)'
-        required: false
         default: 'aarch64'
       subtarget:
         description: 'OpenWrt SUBTARGET (e.g. generic, cortexa53, filogic)'
-        required: false
         default: 'generic'
   push:
   pull_request:
@@ -27,12 +24,12 @@ jobs:
       TARGET: ${{ inputs.target || 'aarch64' }}
       SUBTARGET: ${{ inputs.subtarget || 'generic' }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      MAKE_JOBS: ${{ vars.MAKE_JOBS || 4 }}
+      MAKE_JOBS: 4
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -40,13 +37,13 @@ jobs:
             gettext git libncurses5-dev libssl-dev python3 python3-distutils rsync unzip \
             file wget subversion zlib1g-dev ccache time xsltproc
 
-      - name: Set up caches (dl, ccache)
+      - name: Cache dl and ccache
         uses: actions/cache@v4
         with:
           path: |
             openwrt/dl
             .ccache
-          key: dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ hashFiles('usb-redirector-server/**', 'Makefile', 'package/**/Makefile') }}
+          key: dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ hashFiles('**/*') }}
           restore-keys: |
             dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-
             dl-ccache-${{ env.OPENWRT_BRANCH }}-
@@ -54,13 +51,12 @@ jobs:
       - name: Clone OpenWrt
         run: |
           git clone --depth 1 -b "${OPENWRT_BRANCH}" https://github.com/openwrt/openwrt.git
-          echo "Cloned OpenWrt ${OPENWRT_BRANCH}"
 
       - name: Add package into OpenWrt tree
         run: |
-          # 将本仓库的包目录复制到 openwrt/package 下
-          test -d usb-redirector-server || { echo "usb-redirector-server dir not found at repo root"; exit 1; }
-          rsync -a --delete usb-redirector-server/ openwrt/package/usb-redirector-server/
+          mkdir -p openwrt/package/usb-redirector-server
+          rsync -a --delete ./ openwrt/package/usb-redirector-server/ \
+            --exclude .git --exclude .github
 
       - name: Prepare feeds
         working-directory: openwrt
@@ -68,10 +64,9 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Generate .config for target and packages
+      - name: Configure target and packages
         working-directory: openwrt
         run: |
-          # 生成最小配置，选择目标和两个包，并启用 ccache
           cat > .config <<EOF
           CONFIG_TARGET_${TARGET}=y
           CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -82,13 +77,10 @@ jobs:
           CONFIG_CCACHE=y
           EOF
           make defconfig
-          # 打印确认
-          grep -E 'CONFIG_TARGET_|CONFIG_PACKAGE_usb|CONFIG_CCACHE' .config || true
 
-      - name: Bootstrap toolchain and kernel headers
+      - name: Bootstrap toolchain & kernel
         working-directory: openwrt
         run: |
-          # 先把工具链和内核目标准备好，避免编译 kmod 时缺符号
           make -j${MAKE_JOBS} tools/install
           make -j${MAKE_JOBS} toolchain/install
           make -j${MAKE_JOBS} target/linux/prepare
@@ -96,33 +88,19 @@ jobs:
 
       - name: Build usb-redirector packages
         working-directory: openwrt
-        env:
-          V: s
         run: |
-          # 清理并编译安装到 staging/rootfs（便于依赖解析）
           make -j${MAKE_JOBS} package/usb-redirector-server/clean
-          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=${V}
-          make -j${MAKE_JOBS} package/usb-redirector-server/install V=${V}
+          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=s
+          make -j${MAKE_JOBS} package/usb-redirector-server/install V=s
 
       - name: Collect artifacts
         working-directory: openwrt
         run: |
-          set -eux
-          OUTDIR="${GITHUB_WORKSPACE}/artifacts"
-          mkdir -p "${OUTDIR}"
-          ARCH_DIR=$(ls -d bin/packages/* || true)
-          TARGET_PKG_DIR="bin/targets/${TARGET}/${SUBTARGET}/packages"
-
-          # 用户空间包通常在 bin/packages/<arch>/base 或 <arch>/packages
-          find bin/packages -maxdepth 3 -type f -name 'usb-redirector-server_*.ipk' -print -exec cp -v {} "${OUTDIR}/" \; || true
-          # kmod 通常在目标目录的 packages 下
-          find "${TARGET_PKG_DIR}" -maxdepth 1 -type f -name 'kmod-usb-redirector-server_*.ipk' -print -exec cp -v {} "${OUTDIR}/" \; || true
-
-          # 校验产物存在
-          ls -l "${OUTDIR}"
-          test -n "$(ls -1 ${OUTDIR}/*.ipk 2>/dev/null || true)" || { echo "No ipk artifacts found"; exit 2; }
-
-          (cd "${OUTDIR}" && sha256sum *.ipk > SHA256SUMS)
+          mkdir -p "${GITHUB_WORKSPACE}/artifacts"
+          find bin/packages -type f -name 'usb-redirector-server_*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          find bin/targets -type f -name 'kmod-usb-redirector-server_*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS)
+          ls -l "${GITHUB_WORKSPACE}/artifacts"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
