@@ -1,84 +1,28 @@
-name: Build OpenWrt USB Redirector Server
+name: OpenWrt Multi-Arch Build
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
-
-env:
-  OPENWRT_VERSION: 23.05.5
-  PACKAGE_NAME: usb-redirector-server
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          # ARM
-          - arch: arm_cortex-a7
-            target: ipq40xx
-            subtarget: generic
-          - arch: arm_cortex-a9
-            target: mvebu
-            subtarget: cortexa9
-          - arch: aarch64_cortex-a53
-            target: mediatek
-            subtarget: filogic
-          - arch: aarch64_cortex-a72
-            target: bcm27xx
-            subtarget: bcm2711
-          - arch: aarch64_generic
-            target: rockchip
-            subtarget: armv8
-          - arch: arm_cortex-a15_neon-vfpv4
-            target: ipq806x
-            subtarget: generic
-          # MIPS
-          - arch: mips_24kc
-            target: ath79
-            subtarget: generic
-          - arch: mipsel_24kc
-            target: ramips
-            subtarget: mt7621
-          - arch: mips64_octeonplus
-            target: octeon
-            subtarget: generic
-          # x86
-          - arch: x86_64
-            target: x86
-            subtarget: 64
-          - arch: i386_pentium4
-            target: x86
-            subtarget: generic
-          # PowerPC
-          - arch: powerpc_464fp
-            target: mpc85xx
-            subtarget: p1020
-          - arch: powerpc_8540
-            target: mpc85xx
-            subtarget: generic
-
+        arch:
+          - { platform: "arm_cortex-a7", target: "ipq40xx", subtarget: "generic" }
+          - { platform: "aarch64_generic", target: "rockchip", subtarget: "armv8" }
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Setup OpenWrt SDK dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update -y
-          # 检测并安装合适的 Python distutils/stdlib-extensions
-          if apt-cache show python3-distutils >/dev/null 2>&1; then
-            PY_DIST="python3-distutils"
-          else
-            PY_DIST="python3-stdlib-extensions"
-          fi
+          # 自动判断正确的 distutils 包名
+          PY_DIST=$(apt-cache search --names-only '^python3-distutils$' | grep -q python3-distutils && echo "python3-distutils" || echo "python3-stdlib-extensions")
           sudo apt-get install -y \
             build-essential ccache ecj fastjar file g++ gawk gettext git \
             java-propose-classpath libelf-dev libncurses5-dev libncursesw5-dev \
@@ -86,85 +30,35 @@ jobs:
             python3-dev $PY_DIST python3-venv \
             rsync subversion swig time xsltproc zlib1g-dev zstd
 
-      - name: Cache OpenWrt SDK
-        id: cache-sdk
-        uses: actions/cache@v4
-        with:
-          path: /tmp/openwrt
-          key: sdk-${{ env.OPENWRT_VERSION }}-${{ matrix.target }}-${{ matrix.subtarget }}
-
-      - name: Download OpenWrt SDK (with existence check)
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
+      - name: Download OpenWrt source
         run: |
-          set -e
-          mkdir -p /tmp/openwrt
-          cd /tmp/openwrt
+          git clone https://github.com/openwrt/openwrt.git
+          cd openwrt
+          # 切到需要的版本，例如 23.05.5
+          git checkout v23.05.5
 
-          BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
-          echo "Checking SDK index: $BASE_URL"
-
-          SDK_FILE="$(wget -qO- "$BASE_URL" | grep -oE "openwrt-sdk-${OPENWRT_VERSION}-${{ matrix.target }}-${{ matrix.subtarget }}_[^\"']*\.tar\.(zst|xz)" | head -n1 || true)"
-
-          if [ -z "$SDK_FILE" ]; then
-            echo "SDK not found for ${{ matrix.target }}/${{ matrix.subtarget }} (arch=${{ matrix.arch }}). Skipping."
-            echo "SKIP=true" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          echo "Found SDK file: $SDK_FILE"
-          echo "SDK_URL=${BASE_URL}${SDK_FILE}" >> "$GITHUB_ENV"
-
-          wget "${BASE_URL}${SDK_FILE}"
-          if echo "$SDK_FILE" | grep -q "\.zst$"; then
-            tar --use-compress-program=unzstd -xf "$SDK_FILE"
-          else
-            tar -xf "$SDK_FILE"
-          fi
-
-      - name: Set SDK_PATH
+      - name: Feeds update & install
         run: |
-          SDK_DIR=$(ls -d /tmp/openwrt/openwrt-sdk-* | head -n1)
-          echo "SDK_PATH=$SDK_DIR" >> "$GITHUB_ENV"
-
-      - name: Prepare package
-        if: env.SKIP != 'true'
-        run: |
-          cd "$SDK_PATH"
+          cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          mkdir -p package/${PACKAGE_NAME}
-          rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
 
-      - name: Build package
-        if: env.SKIP != 'true'
+      - name: Prepare config
         run: |
-          cd "$SDK_PATH"
-          make package/${PACKAGE_NAME}/clean
-          make package/${PACKAGE_NAME}/compile V=s
+          cd openwrt
+          make defconfig
+          # 根据 matrix 填充架构
+          echo "CONFIG_TARGET_${{ matrix.arch.target }}=y" >> .config
+          echo "CONFIG_TARGET_${{ matrix.arch.target }}_${{ matrix.arch.subtarget }}=y" >> .config
+          make defconfig
 
-      - name: List built IPKs
-        if: env.SKIP != 'true'
+      - name: Build
         run: |
-          echo "Listing IPKs under: $SDK_PATH/bin"
-          find "$SDK_PATH/bin" -type f -name "*.ipk" -print
+          cd openwrt
+          make -j$(nproc) V=s
 
-      - name: Upload IPK files to release
-        if: env.SKIP != 'true' && github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ${{ env.SDK_PATH }}/bin/packages/**/*.ipk
-          tag_name: v${{ github.run_number }}-${{ matrix.arch }}
-          name: Release ${{ github.run_number }} for ${{ matrix.arch }}
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload IPK files as artifact
-        if: env.SKIP != 'true'
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ipk-${{ matrix.arch }}
-          path: |
-            ${{ env.SDK_PATH }}/bin/packages/**/*.ipk
-          if-no-files-found: warn
+          name: openwrt-${{ matrix.arch.platform }}
+          path: openwrt/bin/targets/**/*
