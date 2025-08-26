@@ -79,8 +79,15 @@ jobs:
             libssl-dev python3 unzip wget python3-pip python3-setuptools \
             python3-dev rsync subversion swig time xsltproc zlib1g-dev zstd
 
+      - name: Cache OpenWrt SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: /tmp/openwrt
+          key: sdk-${{ env.OPENWRT_VERSION }}-${{ matrix.target }}-${{ matrix.subtarget }}
+
       - name: Download OpenWrt SDK (with existence check)
-        id: sdk
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           set -e
           mkdir -p /tmp/openwrt
@@ -93,12 +100,12 @@ jobs:
 
           if [ -z "$SDK_FILE" ]; then
             echo "SDK not found for ${{ matrix.target }}/${{ matrix.subtarget }} (arch=${{ matrix.arch }}). Skipping."
-            echo "SKIP=true" | tee -a "$GITHUB_ENV" > /dev/null
+            echo "SKIP=true" >> "$GITHUB_ENV"
             exit 0
           fi
 
           echo "Found SDK file: $SDK_FILE"
-          echo "SDK_URL=${BASE_URL}${SDK_FILE}" | tee -a "$GITHUB_ENV" > /dev/null
+          echo "SDK_URL=${BASE_URL}${SDK_FILE}" >> "$GITHUB_ENV"
 
           wget "${BASE_URL}${SDK_FILE}"
           if echo "$SDK_FILE" | grep -q "\.zst$"; then
@@ -107,8 +114,10 @@ jobs:
             tar -xf "$SDK_FILE"
           fi
 
-          SDK_DIR="$(ls -d openwrt-sdk-*)"
-          echo "SDK_PATH=/tmp/openwrt/${SDK_DIR}" | tee -a "$GITHUB_ENV" > /dev/null
+      - name: Set SDK_PATH
+        run: |
+          SDK_DIR=$(ls -d /tmp/openwrt/openwrt-sdk-* | head -n1)
+          echo "SDK_PATH=$SDK_DIR" >> "$GITHUB_ENV"
 
       - name: Prepare package
         if: env.SKIP != 'true'
