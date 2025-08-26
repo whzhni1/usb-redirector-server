@@ -73,12 +73,12 @@ jobs:
       - name: Setup OpenWrt SDK dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
-          gettext git java-propose-classpath libelf-dev libncurses5-dev \ 
-          libncursesw5-dev libssl-dev python3 unzip wget \
-          python3-pip python3-setuptools python3-dev python3-distutils python3-venv \
-          rsync subversion swig time xsltproc zlib1g-dev zstd
-
+          sudo apt-get install -y \
+            build-essential ccache ecj fastjar file g++ gawk gettext git \
+            java-propose-classpath libelf-dev libncurses5-dev libncursesw5-dev \
+            libssl-dev python3 unzip wget python3-pip python3-setuptools \
+            python3-dev python3-distutils python3-venv \
+            rsync subversion swig time xsltproc zlib1g-dev zstd
 
       - name: Cache OpenWrt SDK
         id: cache-sdk
