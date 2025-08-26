@@ -119,7 +119,6 @@ jobs:
           mkdir -p package/${PACKAGE_NAME}
           rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
           make defconfig
-
       - name: Build package
         run: |
           cd "$SDK_PATH"
