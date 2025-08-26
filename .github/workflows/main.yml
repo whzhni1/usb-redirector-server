@@ -7,31 +7,62 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  OPENWRT_VERSION: 22.03.5
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        arch:
-          # ARM架构
-          - arm_cortex-a7
-          - arm_cortex-a9
-          - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - aarch64_generic
-          - arm_cortex-a15_neon-vfpv4
-          # MIPS架构
-          - mips_24kc
-          - mipsel_24kc
-          - mips64_octeonplus
-          # x86架构
-          - x86_64
-          - i386_pentium4
+        include:
+          # ARM 架构
+          - arch: arm_cortex-a7
+            target: armvirt
+            subtarget: cortex-a7
+          - arch: arm_cortex-a9
+            target: armvirt
+            subtarget: cortex-a9
+          - arch: aarch64_cortex-a53
+            target: armvirt
+            subtarget: cortex-a53
+          - arch: aarch64_cortex-a72
+            target: armvirt
+            subtarget: cortex-a72
+          - arch: aarch64_generic
+            target: armvirt
+            subtarget: generic
+          - arch: arm_cortex-a15_neon-vfpv4
+            target: armvirt
+            subtarget: cortex-a15
+          # MIPS 架构
+          - arch: mips_24kc
+            target: ath79
+            subtarget: generic
+          - arch: mipsel_24kc
+            target: ramips
+            subtarget: rt305x
+          - arch: mips64_octeonplus
+            target: octeon
+            subtarget: generic
+          # x86 架构
+          - arch: x86_64
+            target: x86
+            subtarget: 64
+          - arch: i386_pentium4
+            target: x86
+            subtarget: generic
           # 其他架构
-          - powerpc_464fp
-          - powerpc_8540
-          - aarch64_generic-gnu
+          - arch: powerpc_464fp
+            target: powerpc
+            subtarget: 44x
+          - arch: powerpc_8540
+            target: powerpc
+            subtarget: ppc8540
+          - arch: aarch64_generic-gnu
+            target: armvirt
+            subtarget: generic
 
     steps:
       - uses: actions/checkout@v4
@@ -50,42 +81,37 @@ jobs:
           python3-pip python3-setuptools python3-dev rsync subversion \
           swig time xsltproc zlib1g-dev
 
-      - name: Setup OpenWrt SDK
+      - name: Download OpenWrt SDK
         run: |
-          # 创建工作目录
           mkdir -p /tmp/openwrt
           cd /tmp/openwrt
-          
-          # 下载 OpenWrt SDK
-          wget https://downloads.openwrt.org/releases/22.03.5/targets/x86/64/openwrt-sdk-22.03.5-x86-64_gcc-11.2.0_musl.Linux-x86_64.tar.xz
-          tar xf openwrt-sdk-22.03.5-x86-64_gcc-11.2.0_musl.Linux-x86_64.tar.xz
+          SDK_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/openwrt-sdk-${OPENWRT_VERSION}-${{ matrix.target }}-${{ matrix.subtarget }}_gcc-11.2.0_musl.Linux-x86_64.tar.xz"
+          echo "Downloading SDK: $SDK_URL"
+          wget $SDK_URL
+          tar xf openwrt-sdk-*.tar.xz
           SDK_DIR=$(ls -d openwrt-sdk-*)
-          cd "$SDK_DIR"
-          
-          # 配置 feeds
+          echo "SDK_PATH=/tmp/openwrt/$SDK_DIR" >> $GITHUB_ENV
+
+      - name: Prepare package
+        run: |
+          cd $SDK_PATH
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          
-          # 复制源码到 package 目录
           mkdir -p package/usb-redirector-server
           cp -r $GITHUB_WORKSPACE/* package/usb-redirector-server/
-          
-          # 设置环境变量
-          echo "SDK_PATH=/tmp/openwrt/$SDK_DIR" >> $GITHUB_ENV
 
       - name: Build USB Redirector Server
         run: |
-          cd $SDK_PATH/package/usb-redirector-server
-          make clean
-          make ARCH=${{ matrix.arch }} all
+          cd $SDK_PATH
+          make package/usb-redirector-server/compile V=s
 
       - name: Upload IPK files
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            ${{ env.SDK_PATH }}/bin/packages/${{ matrix.arch }}/base/usb-redirector-server_*.ipk
-            ${{ env.SDK_PATH }}/bin/packages/${{ matrix.arch }}/base/kmod-usb-redirector-server_*.ipk
+            $(find $SDK_PATH/bin/packages -name "usb-redirector-server_*.ipk")
+            $(find $SDK_PATH/bin/packages -name "kmod-usb-redirector-server_*.ipk")
           tag_name: v${{ github.run_number }}-${{ matrix.arch }}
           name: Release ${{ github.run_number }} for ${{ matrix.arch }}
           generate_release_notes: true
