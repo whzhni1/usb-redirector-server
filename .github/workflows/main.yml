@@ -1,48 +1,132 @@
-name: Build USB Redirector Packages
+name: build-openwrt-usb-redirector-aarch64
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
+    inputs:
+      openwrt_branch:
+        description: 'OpenWrt branch or tag (e.g. v23.05.3, openwrt-23.05)'
+        required: false
+        default: 'v23.05.3'
+      target:
+        description: 'OpenWrt TARGET (e.g. aarch64, rockchip, mediatek, ipq807x)'
+        required: false
+        default: 'aarch64'
+      subtarget:
+        description: 'OpenWrt SUBTARGET (e.g. generic, cortexa53, filogic)'
+        required: false
+        default: 'generic'
+  push:
+  pull_request:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    
+    runs-on: ubuntu-22.04
+    env:
+      TZ: Asia/Shanghai
+      OPENWRT_BRANCH: ${{ inputs.openwrt_branch || 'v23.05.3' }}
+      TARGET: ${{ inputs.target || 'aarch64' }}
+      SUBTARGET: ${{ inputs.subtarget || 'generic' }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      MAKE_JOBS: ${{ vars.MAKE_JOBS || 4 }}
     steps:
-    - uses: actions/checkout@v3
-      with:
-        path: package/usb-redirector-server
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-        gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3 python3-distutils rsync unzip \
+            file wget subversion zlib1g-dev ccache time xsltproc
 
-    - name: Download OpenWrt SDK
-      run: |
-        wget https://downloads.openwrt.org/releases/23.05.0/targets/armvirt/64/openwrt-sdk-23.05.0-armvirt-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-        tar xf openwrt-sdk-23.05.0-armvirt-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-        mv openwrt-sdk-* openwrt-sdk
+      - name: Set up caches (dl, ccache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/dl
+            .ccache
+          key: dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ hashFiles('usb-redirector-server/**', 'Makefile', 'package/**/Makefile') }}
+          restore-keys: |
+            dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-
+            dl-ccache-${{ env.OPENWRT_BRANCH }}-
 
-    - name: Configure and Build
-      run: |
-        cd openwrt-sdk
-        echo "CONFIG_TARGET_armvirt=y" > .config
-        echo "CONFIG_TARGET_armvirt_64=y" >> .config
-        echo "CONFIG_TARGET_armvirt_64_Default=y" >> .config
-        echo "CONFIG_PACKAGE_usb-redirector-server=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-redirector-server=y" >> .config
-        make defconfig
-        make package/usb-redirector-server/compile V=s
+      - name: Clone OpenWrt
+        run: |
+          git clone --depth 1 -b "${OPENWRT_BRANCH}" https://github.com/openwrt/openwrt.git
+          echo "Cloned OpenWrt ${OPENWRT_BRANCH}"
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: usb-redirector-packages
-        path: |
-          openwrt-sdk/bin/packages/aarch64_generic/base/usb-redirector-server-*.ipk
-          openwrt-sdk/bin/packages/aarch64_generic/base/kmod-usb-redirector-server-*.ipk
+      - name: Add package into OpenWrt tree
+        run: |
+          # 将本仓库的包目录复制到 openwrt/package 下
+          test -d usb-redirector-server || { echo "usb-redirector-server dir not found at repo root"; exit 1; }
+          rsync -a --delete usb-redirector-server/ openwrt/package/usb-redirector-server/
+
+      - name: Prepare feeds
+        working-directory: openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate .config for target and packages
+        working-directory: openwrt
+        run: |
+          # 生成最小配置，选择目标和两个包，并启用 ccache
+          cat > .config <<EOF
+          CONFIG_TARGET_${TARGET}=y
+          CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+          CONFIG_TARGET_BOARD="${TARGET}"
+          CONFIG_TARGET_SUBTARGET="${SUBTARGET}"
+          CONFIG_PACKAGE_usb-redirector-server=y
+          CONFIG_PACKAGE_kmod-usb-redirector-server=y
+          CONFIG_CCACHE=y
+          EOF
+          make defconfig
+          # 打印确认
+          grep -E 'CONFIG_TARGET_|CONFIG_PACKAGE_usb|CONFIG_CCACHE' .config || true
+
+      - name: Bootstrap toolchain and kernel headers
+        working-directory: openwrt
+        run: |
+          # 先把工具链和内核目标准备好，避免编译 kmod 时缺符号
+          make -j${MAKE_JOBS} tools/install
+          make -j${MAKE_JOBS} toolchain/install
+          make -j${MAKE_JOBS} target/linux/prepare
+          make -j${MAKE_JOBS} target/linux/compile
+
+      - name: Build usb-redirector packages
+        working-directory: openwrt
+        env:
+          V: s
+        run: |
+          # 清理并编译安装到 staging/rootfs（便于依赖解析）
+          make -j${MAKE_JOBS} package/usb-redirector-server/clean
+          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=${V}
+          make -j${MAKE_JOBS} package/usb-redirector-server/install V=${V}
+
+      - name: Collect artifacts
+        working-directory: openwrt
+        run: |
+          set -eux
+          OUTDIR="${GITHUB_WORKSPACE}/artifacts"
+          mkdir -p "${OUTDIR}"
+          ARCH_DIR=$(ls -d bin/packages/* || true)
+          TARGET_PKG_DIR="bin/targets/${TARGET}/${SUBTARGET}/packages"
+
+          # 用户空间包通常在 bin/packages/<arch>/base 或 <arch>/packages
+          find bin/packages -maxdepth 3 -type f -name 'usb-redirector-server_*.ipk' -print -exec cp -v {} "${OUTDIR}/" \; || true
+          # kmod 通常在目标目录的 packages 下
+          find "${TARGET_PKG_DIR}" -maxdepth 1 -type f -name 'kmod-usb-redirector-server_*.ipk' -print -exec cp -v {} "${OUTDIR}/" \; || true
+
+          # 校验产物存在
+          ls -l "${OUTDIR}"
+          test -n "$(ls -1 ${OUTDIR}/*.ipk 2>/dev/null || true)" || { echo "No ipk artifacts found"; exit 2; }
+
+          (cd "${OUTDIR}" && sha256sum *.ipk > SHA256SUMS)
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}
+          path: artifacts/*
+          if-no-files-found: error
