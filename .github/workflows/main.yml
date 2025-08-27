@@ -44,7 +44,7 @@ jobs:
           path: |
             ImmortalWrt/dl
             .ccache
-          key: dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ hashFiles('**/*') }}
+          key: dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ github.sha }}
           restore-keys: |
             dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-
             dl-ccache-${{ env.OPENWRT_BRANCH }}-
