@@ -97,10 +97,84 @@ jobs:
           make -j${MAKE_JOBS} target/linux/prepare
           make -j${MAKE_JOBS} target/linux/compile
 
+      # 关键：先 prepare 解压源码，再精准注入兼容补丁
+      - name: Prepare usb-redirector source
+        working-directory: ImmortalWrt
+        run: |
+          set -eux
+          make -j${MAKE_JOBS} package/usb-redirector-server/clean V=s
+          make -j${MAKE_JOBS} package/usb-redirector-server/prepare V=s
+
+      - name: Inject kernel 6.4+ API compatibility patch
+        working-directory: ImmortalWrt
+        run: |
+          set -eux
+          # 定位已解压的源码目录
+          PKGDIR="$(find build_dir -type d -path '*/usb-redirector-server-*' | head -n1)"
+          [ -n "$PKGDIR" ] || (echo "未找到 usb-redirector-server 源码目录" && exit 1)
+          CDEV="$PKGDIR/src/tusbd/cdev.c"
+          [ -f "$CDEV" ] || (echo "未找到 $CDEV" && exit 1)
+
+          # 如果已经打过补丁就跳过
+          if grep -q 'URS_KVER_GUARD' "$CDEV"; then
+            echo "兼容补丁已存在，跳过注入"
+            exit 0
+          fi
+
+          # 确保包含 linux/version.h
+          if ! grep -q 'linux/version.h' "$CDEV"; then
+            # 插入到首个 include 之前也可行，但为了稳妥：插入到文件最开头
+            sed -i '1i #include <linux/version.h>' "$CDEV"
+          fi
+
+          # 计算应插入宏定义的位置：最后一个 #include 行之后
+          LAST_INC_LINE="$(awk '/^#include/{n=NR} END{if(n)print n}' "$CDEV")"
+          [ -n "${LAST_INC_LINE:-}" ] || LAST_INC_LINE=0
+
+          # 在 include 区块后注入宏与兼容封装
+          awk -v line="$LAST_INC_LINE" '
+            NR==line {
+              print;
+              print "";
+              print "/* --- usb-redirector-server kernel >= 6.4 compatibility --- */";
+              print "#ifndef URS_KVER_GUARD";
+              print "#define URS_KVER_GUARD 1";
+              print "struct class; /* fwd decl */";
+              print "struct module; /* fwd decl */";
+              print "#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)";
+              print "static inline struct class *compat_class_create(struct module *owner, const char *name)";
+              print "{";
+              print "    /* kernel >= 6.4: class_create only takes name */";
+              print "    return class_create(name);";
+              print "}";
+              print "#define class_create compat_class_create";
+              print "#define URS_DEV_T const struct device";
+              print "#else";
+              print "#define URS_DEV_T struct device";
+              print "#endif";
+              print "#endif /* URS_KVER_GUARD */";
+              print "/* --------------------------------------------------------- */";
+              next
+            }
+            { print }
+          ' "$CDEV" > "$CDEV.new" && mv "$CDEV.new" "$CDEV"
+
+          # 将 lIIllIII 的入参从 struct device* 改成 URS_DEV_T*（条件编译内会自动解开成 const 或非 const）
+          # 尽量稳健匹配：允许前置修饰、空格变体
+          sed -E -i 's@(^[[:space:]]*static[[:space:]]+int[[:space:]]+lIIllIII[[:space:]]*\\()[[:space:]]*struct[[:space:]]+device[[:space:]]*\\*@\\1URS_DEV_T *@' "$CDEV" || true
+
+          # 有些源码会先有原型声明，再定义一次；一并替换
+          sed -E -i 's@(^[[:space:]]*int[[:space:]]+lIIllIII[[:space:]]*\\()[[:space:]]*struct[[:space:]]+device[[:space:]]*\\*@\\1URS_DEV_T *@' "$CDEV" || true
+
+          echo "补丁注入完成："
+          grep -n 'URS_KVER_GUARD' -n "$CDEV" || true
+          grep -n 'class_create compat_class_create' "$CDEV" || true
+          grep -n 'URS_DEV_T' "$CDEV" || true
+
       - name: Build usb-redirector packages
         working-directory: ImmortalWrt
         run: |
-          make -j${MAKE_JOBS} package/usb-redirector-server/clean
+          set -eux
           make -j${MAKE_JOBS} package/usb-redirector-server/compile V=s
           # install 目标并不是必须的，部分自定义包无 install
           make -j${MAKE_JOBS} package/usb-redirector-server/install V=s || true
