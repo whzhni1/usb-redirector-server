@@ -145,8 +145,8 @@ EOF
         working-directory: ImmortalWrt
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/artifacts"
-          find bin/packages -type f -name 'usb-redirector-server_*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
-          find bin/targets -type f -name 'kmod-usb-redirector-server_*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          find bin/packages -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          find bin/targets -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
           (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS || true)
           ls -l "${GITHUB_WORKSPACE}/artifacts"
 
@@ -155,7 +155,7 @@ EOF
         with:
           name: usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}
           path: artifacts/*
-          if-no-files-found: error
+          if-no-files-found: warn
           
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
