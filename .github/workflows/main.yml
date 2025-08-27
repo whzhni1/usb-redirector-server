@@ -101,31 +101,28 @@ jobs:
           make package/usb-redirector-server/clean V=s
           make package/usb-redirector-server/prepare V=s
 
-            - name: Patch for Linux >= 6.4 API changes
-              working-directory: ImmortalWrt
-            run: |
+      - name: Patch for Linux >= 6.4 API changes
+        working-directory: ImmortalWrt
+        run: |
           set -eux
           PKGDIR="$(find build_dir -type d -path '*/usb-redirector-server-*' | head -n1)"
           CDEV="$PKGDIR/src/tusbd/cdev.c"
           [ -f "$CDEV" ] || { echo "❌ cdev.c not found"; exit 1; }
 
-          # 确保包含版本宏头
+          # 确保包含版本检测头文件
           grep -q 'linux/version.h' "$CDEV" || sed -i '1i #include <linux/version.h>' "$CDEV"
 
-          # 先在 class_create 调用前插 #if
-          grep -q 'class_create(THIS_MODULE' "$CDEV" && \
+          # 在调用前插入内核版本判断
+          if grep -q 'class_create(THIS_MODULE' "$CDEV"; then
             sed -i '/class_create(THIS_MODULE/i #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)' "$CDEV"
-
-          # 把 >=6.4 调用改成单参
-          sed -i 's/class_create(THIS_MODULE[[:space:]]*,[[:space:]]*/class_create(/' "$CDEV"
-
-          # 在调用后插 #else + 旧调用 + #endif
-          grep -q '#if LINUX_VERSION_CODE' "$CDEV" && \
+            # 改成单参数形式
+            sed -i 's/class_create(THIS_MODULE[[:space:]]*,[[:space:]]*/class_create(/' "$CDEV"
+            # 在调用后追加 else 分支和 endif
             sed -i '/class_create(/a #else\n    lIIIlII = class_create(THIS_MODULE, IIIllII);\n#endif' "$CDEV"
+          fi
 
-          # 修正 dev_uevent 函数指针签名
+          # 修正 dev_uevent 函数指针和定义
           sed -E -i 's/int[[:space:]]*\(\*dev_uevent\)\(struct device \*/int (*dev_uevent)(const struct device */' "$CDEV"
-          # 修正 lIIllIII 定义签名
           sed -E -i 's/static int[[:space:]]+lIIllIII[[:space:]]*\(struct device \*/static int lIIllIII(const struct device */' "$CDEV"
 
       - name: Build usb-redirector packages
