@@ -101,29 +101,38 @@ jobs:
           make package/usb-redirector-server/clean V=s
           make package/usb-redirector-server/prepare V=s
 
-      - name: Patch for Linux >= 6.4 API changes
+      - name: Inject kernel compatibility patch
         working-directory: ImmortalWrt
         run: |
-          set -eux
-          PKGDIR="$(find build_dir -type d -path '*/usb-redirector-server-*' | head -n1)"
-          CDEV="$PKGDIR/src/tusbd/cdev.c"
-          [ -f "$CDEV" ] || { echo "❌ cdev.c not found"; exit 1; }
+          mkdir -p package/usb-redirector-server/patches
+          cat <<'EOF' > package/usb-redirector-server/patches/001-kernel-compat.patch
+--- a/src/tusbd/cdev.c
++++ b/src/tusbd/cdev.c
+@@ -10,6 +10,12 @@
+ #include <linux/fs.h>
+ #include <linux/uaccess.h>
+ #include <linux/slab.h>
++#include <linux/version.h>
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++#define class_create(owner, name) class_create(name)
++#define DEV_UEVENT_CONST const
++#else
++#define DEV_UEVENT_CONST
++#endif
 
-          # 确保包含版本检测头文件
-          grep -q 'linux/version.h' "$CDEV" || sed -i '1i #include <linux/version.h>' "$CDEV"
+@@ -52,7 +58,7 @@
+-    lIIIlII->dev_uevent=lIIllIII,
++    lIIIlII->dev_uevent=lIIllIII,
 
-          # 在调用前插入内核版本判断
-          if grep -q 'class_create(THIS_MODULE' "$CDEV"; then
-            sed -i '/class_create(THIS_MODULE/i #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)' "$CDEV"
-            # 改成单参数形式
-            sed -i 's/class_create(THIS_MODULE[[:space:]]*,[[:space:]]*/class_create(/' "$CDEV"
-            # 在调用后追加 else 分支和 endif
-            sed -i '/class_create(/a #else\n    lIIIlII = class_create(THIS_MODULE, IIIllII);\n#endif' "$CDEV"
-          fi
-
-          # 修正 dev_uevent 函数指针和定义
-          sed -E -i 's/int[[:space:]]*\(\*dev_uevent\)\(struct device \*/int (*dev_uevent)(const struct device */' "$CDEV"
-          sed -E -i 's/static int[[:space:]]+lIIllIII[[:space:]]*\(struct device \*/static int lIIllIII(const struct device */' "$CDEV"
+@@ -65,7 +71,7 @@
+-static int lIIllIII(struct device *dev, struct kobj_uevent_env *env)
++static int lIIllIII(DEV_UEVENT_CONST struct device *dev, struct kobj_uevent_env *env)
+ {
+     add_uevent_var(env,"MODALIAS=usb-redirector");
+     return 0;
+ }
+EOF
 
       - name: Build usb-redirector packages
         working-directory: ImmortalWrt
