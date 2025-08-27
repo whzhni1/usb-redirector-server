@@ -161,11 +161,13 @@ EOF
         uses: softprops/action-gh-release@v1
         if: success()
         with:
-        name: "usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}"
-        tag_name: "build-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}"
-        files: artifacts/*.ipk
-        body: |
-    自动构建的 usb-redirector-server 包  
-    架构: ${{ env.TARGET }}-${{ env.SUBTARGET }}  
-    OpenWrt 分支: ${{ env.OPENWRT_BRANCH }}  
-    构建时间: ${{ github.run_started_at }}
+          name: "usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}"
+          tag_name: "build-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}"
+          files: artifacts/*.ipk
+          body: |
+            自动构建的 usb-redirector-server 包  
+            架构: ${{ env.TARGET }}-${{ env.SUBTARGET }}  
+            OpenWrt 分支: ${{ env.OPENWRT_BRANCH }}  
+            构建时间: ${{ github.run_started_at }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
