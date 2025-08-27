@@ -111,11 +111,12 @@ jobs:
 
           # 修正 class_create 调用
           sed -i '/class_create(THIS_MODULE/s//\
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)\
-class_create(/' "$CDEV"
-          sed -i '/class_create(/a #else\
-lIIIlII = class_create(THIS_MODULE, IIIllII);\
-#endif' "$CDEV"
+          i #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)\
+          s/class_create(THIS_MODULE[[:space:]]*,[[:space:]]*/class_create(/g
+            a #else
+            a     lIIIlII = class_create(THIS_MODULE, IIIllII);
+            a #endif
+          }' "$CDEV"
 
           # 修正 dev_uevent 签名
           sed -E -i 's/int \(\*dev_uevent\)\(struct device \*/int (*dev_uevent)(const struct device */' "$CDEV"
