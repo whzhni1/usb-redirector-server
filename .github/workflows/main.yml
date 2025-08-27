@@ -148,7 +148,8 @@ EOF
           find bin/packages -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
           find bin/targets -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
           (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS || true)
-          ls -l "${GITHUB_WORKSPACE}/artifacts"
+          echo "📦 收集到以下文件："
+          ls -lh "${GITHUB_WORKSPACE}/artifacts"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -162,7 +163,7 @@ EOF
         if: success()
         with:
           name: "usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}"
-          tag_name: "build-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}"
+          tag_name: "build-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}-${{ github.run_id }}"
           files: artifacts/*.ipk
           body: |
             自动构建的 usb-redirector-server 包  
