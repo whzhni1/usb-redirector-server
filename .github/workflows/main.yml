@@ -101,26 +101,32 @@ jobs:
           make package/usb-redirector-server/clean V=s
           make package/usb-redirector-server/prepare V=s
 
-      - name: Patch for Linux >= 6.4 API changes
-        working-directory: ImmortalWrt
-        run: |
-          PKGDIR=$(find build_dir -type d -path "*/usb-redirector-server-*" | head -n1)
+            - name: Patch for Linux >= 6.4 API changes
+              working-directory: ImmortalWrt
+            run: |
+          set -eux
+          PKGDIR="$(find build_dir -type d -path '*/usb-redirector-server-*' | head -n1)"
           CDEV="$PKGDIR/src/tusbd/cdev.c"
           [ -f "$CDEV" ] || { echo "❌ cdev.c not found"; exit 1; }
+
+          # 确保包含版本宏头
           grep -q 'linux/version.h' "$CDEV" || sed -i '1i #include <linux/version.h>' "$CDEV"
 
-          # 修正 class_create 调用
-          sed -i '/class_create(THIS_MODULE/s//\
-          i #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)\
-          s/class_create(THIS_MODULE[[:space:]]*,[[:space:]]*/class_create(/g
-            a #else
-            a     lIIIlII = class_create(THIS_MODULE, IIIllII);
-            a #endif
-          }' "$CDEV"
+          # 先在 class_create 调用前插 #if
+          grep -q 'class_create(THIS_MODULE' "$CDEV" && \
+            sed -i '/class_create(THIS_MODULE/i #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)' "$CDEV"
 
-          # 修正 dev_uevent 签名
-          sed -E -i 's/int \(\*dev_uevent\)\(struct device \*/int (*dev_uevent)(const struct device */' "$CDEV"
-          sed -E -i 's/static int lIIllIII\(struct device \*/static int lIIllIII(const struct device */' "$CDEV"
+          # 把 >=6.4 调用改成单参
+          sed -i 's/class_create(THIS_MODULE[[:space:]]*,[[:space:]]*/class_create(/' "$CDEV"
+
+          # 在调用后插 #else + 旧调用 + #endif
+          grep -q '#if LINUX_VERSION_CODE' "$CDEV" && \
+            sed -i '/class_create(/a #else\n    lIIIlII = class_create(THIS_MODULE, IIIllII);\n#endif' "$CDEV"
+
+          # 修正 dev_uevent 函数指针签名
+          sed -E -i 's/int[[:space:]]*\(\*dev_uevent\)\(struct device \*/int (*dev_uevent)(const struct device */' "$CDEV"
+          # 修正 lIIllIII 定义签名
+          sed -E -i 's/static int[[:space:]]+lIIllIII[[:space:]]*\(struct device \*/static int lIIllIII(const struct device */' "$CDEV"
 
       - name: Build usb-redirector packages
         working-directory: ImmortalWrt
