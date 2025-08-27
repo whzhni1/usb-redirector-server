@@ -71,7 +71,7 @@ jobs:
           make package/usb-redirector-server/{clean,compile} V=s -j$(nproc)
 
       - name: Upload IPK Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: usb-redirector-${{ matrix.target }}-${{ matrix.subtarget }}
           path: |
