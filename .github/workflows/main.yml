@@ -51,6 +51,7 @@ jobs:
 
       - name: Clone ImmortalWrt
         run: |
+          rm -rf ImmortalWrt
           git clone --depth 1 -b "${OPENWRT_BRANCH}" https://github.com/ImmortalWrt/ImmortalWrt.git
 
       - name: Add package into ImmortalWrt tree
