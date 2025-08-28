@@ -111,43 +111,6 @@ jobs:
           make package/usb-redirector-server/prepare V=s
           find build_dir -maxdepth 3 -type d -name 'usb-redirector-server-*' || true
 
-      - name: Inject kernel compatibility patch (fixed EOF)
-        working-directory: ImmortalWrt
-        continue-on-error: true
-        run: |
-          set -x
-          mkdir -p package/usb-redirector-server/patches
-          cat <<'EOF' > package/usb-redirector-server/patches/001-kernel-compat.patch
---- a/src/tusbd/cdev.c
-+++ b/src/tusbd/cdev.c
-@@ -10,6 +10,12 @@
- #include <linux/fs.h>
- #include <linux/uaccess.h>
- #include <linux/slab.h>
-+#include <linux/version.h>
-+
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
-+#define class_create(owner, name) class_create(name)
-+#define DEV_UEVENT_CONST const
-+#else
-+#define DEV_UEVENT_CONST
-+#endif
-
-@@ -52,7 +58,7 @@
--    lIIIlII->dev_uevent=lIIllIII,
-+    lIIIlII->dev_uevent=lIIllIII,
-
-@@ -65,7 +71,7 @@
--static int lIIllIII(struct device *dev, struct kobj_uevent_env *env)
-+static int lIIllIII(DEV_UEVENT_CONST struct device *dev, struct kobj_uevent_env *env)
- {
-     add_uevent_var(env,"MODALIAS=usb-redirector");
-     return 0;
- }
-EOF
-          echo "✅ 补丁文件写入完成"
-          cat package/usb-redirector-server/patches/001-kernel-compat.patch
-
       - name: Build usb-redirector packages
         working-directory: ImmortalWrt
         if: always()
