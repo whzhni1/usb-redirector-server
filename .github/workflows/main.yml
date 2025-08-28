@@ -106,6 +106,7 @@ jobs:
           CONFIG_PACKAGE_usb-redirector-server=y
           CONFIG_PACKAGE_kmod-usb-redirector-server=y
           CONFIG_CCACHE=y
+          CONFIG_KERNEL_WERROR=n
           EOF
           make defconfig
           echo "build_configured=true" >> $GITHUB_OUTPUT
