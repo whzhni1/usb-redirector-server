@@ -70,7 +70,6 @@ jobs:
             echo "❌ 未找到包 Makefile"
             exit 1
           fi
-          echo "包目录结构："
           ls -R ImmortalWrt/package/usb-redirector-server || true
 
       - name: Prepare feeds
@@ -93,7 +92,6 @@ jobs:
           CONFIG_PACKAGE_kmod-usb-redirector-server=y
           CONFIG_CCACHE=y
           EOF
-          cat .config
           make defconfig
 
       - name: Bootstrap toolchain & kernel
@@ -105,32 +103,24 @@ jobs:
           make -j${MAKE_JOBS} target/linux/prepare V=s
           make -j${MAKE_JOBS} target/linux/compile V=s
 
-      - name: Prepare usb-redirector-server source (first pass)
+      - name: Prepare usb-redirector-server source
         working-directory: ImmortalWrt
         run: |
           set -x
           make package/usb-redirector-server/clean V=s
           make package/usb-redirector-server/prepare V=s
-          echo "当前 build_dir 中的 usb-redirector-server 源目录："
-          find build_dir -maxdepth 3 -type d -name 'usb-redirector-server-*' -print || true
+          find build_dir -maxdepth 3 -type d -name 'usb-redirector-server-*' || true
 
-      - name: Inject kernel compatibility patch (debug, with re-prepare)
+      - name: Inject kernel compatibility patch (fixed EOF)
         working-directory: ImmortalWrt
         continue-on-error: true
         run: |
           set -x
-          echo "当前工作目录: $(pwd)"
-          ls -R package/usb-redirector-server || true
-
           mkdir -p package/usb-redirector-server/patches
-
-          echo "写入补丁文件..."
           cat <<'EOF' > package/usb-redirector-server/patches/001-kernel-compat.patch
 --- a/src/tusbd/cdev.c
 +++ b/src/tusbd/cdev.c
-@@ -1,8 +1,14 @@
- #include <linux/module.h>
- #include <linux/device.h>
+@@ -10,6 +10,12 @@
  #include <linux/fs.h>
  #include <linux/uaccess.h>
  #include <linux/slab.h>
@@ -142,14 +132,12 @@ jobs:
 +#else
 +#define DEV_UEVENT_CONST
 +#endif
- 
- /* 其他原有 include/定义保留 */
 
-@@ -60,7 +66,7 @@
+@@ -52,7 +58,7 @@
 -    lIIIlII->dev_uevent=lIIllIII,
 +    lIIIlII->dev_uevent=lIIllIII,
 
-@@ -120,7 +126,7 @@
+@@ -65,7 +71,7 @@
 -static int lIIllIII(struct device *dev, struct kobj_uevent_env *env)
 +static int lIIllIII(DEV_UEVENT_CONST struct device *dev, struct kobj_uevent_env *env)
  {
@@ -157,59 +145,30 @@ jobs:
      return 0;
  }
 EOF
+          echo "✅ 补丁文件写入完成"
+          cat package/usb-redirector-server/patches/001-kernel-compat.patch
 
-          echo "补丁文件内容:"
-          sed -n '1,200p' package/usb-redirector-server/patches/001-kernel-compat.patch
-
-          echo "强制重新 prepare 以应用 patches/*.patch ..."
-          make package/usb-redirector-server/clean V=s || true
-          make package/usb-redirector-server/prepare V=s || true
-
-          echo "定位源码目录并 dry-run 测试补丁（用于诊断）..."
-          PKGDIR=$(find build_dir -type d -path '*/usb-redirector-server-*' | head -n1 || true)
-          echo "PKGDIR=$PKGDIR"
-          if [ -n "$PKGDIR" ]; then
-            find "$PKGDIR" -maxdepth 3 -type f -path '*/src/tusbd/cdev.c' -print || true
-            patch -p1 --dry-run -d "$PKGDIR" < package/usb-redirector-server/patches/001-kernel-compat.patch || true
-            echo "cdev.c 头部预览："
-            sed -n '1,80p' "$PKGDIR/src/tusbd/cdev.c" || true
-            echo "搜索 DEV_UEVENT_CONST/版本宏："
-            grep -nE 'DEV_UEVENT_CONST|linux/version.h|class_create' "$PKGDIR/src/tusbd/cdev.c" || true
-          else
-            echo "❌ 未找到 PKGDIR，无法 dry-run"
-          fi
-
-          echo "✅ 补丁注入步骤结束（即使失败也继续后续步骤）"
-
-      - name: Build usb-redirector packages (always run)
+      - name: Build usb-redirector packages
         working-directory: ImmortalWrt
         if: always()
         continue-on-error: true
         run: |
           set -x
-          mkdir -p "${GITHUB_WORKSPACE}/logs"
-          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=s 2>&1 | tee "${GITHUB_WORKSPACE}/logs/compile.log" || true
-          make -j${MAKE_JOBS} package/usb-redirector-server/install V=s 2>&1 | tee "${GITHUB_WORKSPACE}/logs/install.log" || true
-          echo "编译日志大小："
-          ls -lh "${GITHUB_WORKSPACE}/logs" || true
+          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=s || true
+          make -j${MAKE_JOBS} package/usb-redirector-server/install V=s || true
 
-      - name: Collect artifacts (always run)
+      - name: Collect artifacts
         working-directory: ImmortalWrt
         if: always()
         run: |
           set -x
           mkdir -p "${GITHUB_WORKSPACE}/artifacts"
-          # 收集 ipk
           find bin/packages -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \; || true
           find bin/targets  -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \; || true
-          # 收集日志
-          cp -v "${GITHUB_WORKSPACE}"/logs/* "${GITHUB_WORKSPACE}/artifacts/" 2>/dev/null || true
-          # 校验
           (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS || true)
-          echo "📦 收集到的文件:"
           ls -lh "${GITHUB_WORKSPACE}/artifacts" || true
 
-      - name: Upload artifacts (always run)
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -217,21 +176,17 @@ EOF
           path: artifacts/*
           if-no-files-found: warn
           
-      - name: Create GitHub Release (always run)
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         if: always()
         with:
           name: "usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}"
           tag_name: "build-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}-${{ github.run_id }}"
-          files: |
-            artifacts/*.ipk
-            artifacts/SHA256SUMS
-            artifacts/*.log
+          files: artifacts/*
           body: |
-            自动构建的 usb-redirector-server 包
-            架构: ${{ env.TARGET }}-${{ env.SUBTARGET }}
-            OpenWrt 分支: ${{ env.OPENWRT_BRANCH }}
+            自动构建的 usb-redirector-server 包  
+            架构: ${{ env.TARGET }}-${{ env.SUBTARGET }}  
+            OpenWrt 分支: ${{ env.OPENWRT_BRANCH }}  
             构建时间: ${{ github.run_started_at }}
-            说明: 本次为调试版工作流，发布中同时附带 compile/install 日志，便于排查。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
