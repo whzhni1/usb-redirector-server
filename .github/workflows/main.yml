@@ -1,4 +1,4 @@
-name: build-ImmortalWrt-usb-redirector-aarch64-debug
+name: build-ImmortalWrt-usb-redirector-server-${{ inputs.target }}-${{ inputs.subtarget }}-debug
 
 on:
   workflow_dispatch:
@@ -59,18 +59,12 @@ jobs:
       - name: Add package into ImmortalWrt tree
         run: |
           set -x
+          rm -rf ImmortalWrt/package/usb-redirector-server
           mkdir -p ImmortalWrt/package/usb-redirector-server
-          if [ -f Makefile ] && grep -q "include \$(INCLUDE_DIR)/package.mk" Makefile; then
-            rsync -a --delete ./ ImmortalWrt/package/usb-redirector-server/ \
-              --exclude .git --exclude .github --exclude ImmortalWrt
-          elif [ -d usb-redirector-server ]; then
-            rsync -a --delete usb-redirector-server/ ImmortalWrt/package/usb-redirector-server/ \
-              --exclude .git --exclude .github --exclude ImmortalWrt
-          else
-            echo "❌ 未找到包 Makefile"
-            exit 1
-          fi
-          ls -R ImmortalWrt/package/usb-redirector-server || true
+          rsync -a --delete usb-redirector-server/ \
+            ImmortalWrt/package/usb-redirector-server/ \
+            --exclude .git --exclude .github
+          ls -R ImmortalWrt/package/usb-redirector-server
 
       - name: Prepare feeds
         working-directory: ImmortalWrt
@@ -84,14 +78,12 @@ jobs:
         run: |
           set -x
           cat > .config <<EOF
-          CONFIG_TARGET_${TARGET}=y
-          CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-          CONFIG_TARGET_BOARD="${TARGET}"
-          CONFIG_TARGET_SUBTARGET="${SUBTARGET}"
-          CONFIG_PACKAGE_usb-redirector-server=y
-          CONFIG_PACKAGE_kmod-usb-redirector-server=y
-          CONFIG_CCACHE=y
-          EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_PACKAGE_usb-redirector-server=y
+CONFIG_PACKAGE_kmod-usb-redirector-server=y
+CONFIG_CCACHE=y
+EOF
           make defconfig
 
       - name: Bootstrap toolchain & kernel
@@ -113,23 +105,24 @@ jobs:
 
       - name: Build usb-redirector packages
         working-directory: ImmortalWrt
-        if: always()
         continue-on-error: true
         run: |
           set -x
-          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=s || true
-          make -j${MAKE_JOBS} package/usb-redirector-server/install V=s || true
+          for PKG in usb-redirector-server kmod-usb-redirector-server; do
+            make -j${MAKE_JOBS} package/$PKG/{clean,prepare,compile,install} V=s || true
+          done
 
       - name: Collect artifacts
         working-directory: ImmortalWrt
-        if: always()
         run: |
           set -x
           mkdir -p "${GITHUB_WORKSPACE}/artifacts"
-          find bin/packages -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \; || true
-          find bin/targets  -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \; || true
-          (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS || true)
-          ls -lh "${GITHUB_WORKSPACE}/artifacts" || true
+          find bin/packages -type f -name '*usb-redirector-server*.ipk' \
+            -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          find bin/targets  -type f -name '*usb-redirector-server*.ipk' \
+            -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS)
+          ls -lh "${GITHUB_WORKSPACE}/artifacts"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -138,7 +131,7 @@ jobs:
           name: usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}
           path: artifacts/*
           if-no-files-found: warn
-          
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         if: always()
