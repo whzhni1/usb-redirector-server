@@ -1,22 +1,35 @@
 --- a/src/tusbd/cdev.c
 +++ b/src/tusbd/cdev.c
-@@ -10,6 +10,12 @@
+@@ -10,6 +10,7 @@
  #include <linux/fs.h>
  #include <linux/uaccess.h>
  #include <linux/slab.h>
 +#include <linux/version.h>
-+
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
-+#define class_create(owner, name) class_create(name)
-+#define DEV_UEVENT_CONST const
-+#else
-+#define DEV_UEVENT_CONST
-+#endif
  
- /* Original device uevent function */
--static int dev_uevent(struct device *dev, struct kobj_uevent_env *env)
-+static int dev_uevent(DEV_UEVENT_CONST struct device *dev, struct kobj_uevent_env *env)
- {
-     add_uevent_var(env,"MODALIAS=usb-redirector");
-     return 0;
- }
+ static struct class *lIIIlII;
+ static struct mutex lIIIlIl;
+@@ -40,7 +41,11 @@ static int lIIllIII(struct device *dev, struct kobj_uevent_env *env)
+ #define IIllIII _IOW(0xF5,0,typeof(struct IIlIlII))
+ 
+ static int lIIlllllI(void) {
+-    if((lIIIlII=class_create(THIS_MODULE,IIIllII))==NULL) {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++    if((lIIIlII=class_create(IIIllII))==NULL) {
++#else
++    if((lIIIlII=class_create(THIS_MODULE, IIIllII))==NULL) {
++#endif
+         return -ENOMEM;
+     }
+     
+@@ -49,7 +54,11 @@ static int lIIlllllI(void) {
+     cdev_init(&lIIIlIII,&lIIIlIIl);
+     lIIIlIII.owner=THIS_MODULE;
+     
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++    lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;
++#else
+     lIIIlII->dev_uevent=lIIllIII;
++#endif
+     
+     if(cdev_add(&lIIIlIII,MKDEV(lIIIlI,0),1)<0) {
+         class_destroy(lIIIlII);
