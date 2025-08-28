@@ -77,13 +77,8 @@ jobs:
         working-directory: ImmortalWrt
         run: |
           set -x
-          cat > .config <<EOF
-CONFIG_TARGET_${TARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-CONFIG_PACKAGE_usb-redirector-server=y
-CONFIG_PACKAGE_kmod-usb-redirector-server=y
-CONFIG_CCACHE=y
-EOF
+          printf "CONFIG_TARGET_%s=y\nCONFIG_TARGET_%s_%s=y\nCONFIG_PACKAGE_usb-redirector-server=y\nCONFIG_PACKAGE_kmod-usb-redirector-server=y\nCONFIG_CCACHE=y\n" \
+            "$TARGET" "$TARGET" "$SUBTARGET" > .config
           make defconfig
 
       - name: Bootstrap toolchain & kernel
