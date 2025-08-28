@@ -1,0 +1,246 @@
+name: build-ImmortalWrt-usb-redirector-aarch64
+
+on:
+  workflow_dispatch:
+    inputs:
+      ImmortalWrt_branch:
+        description: 'ImmortalWrt branch or tag'
+        default: 'v24.10.2'
+      target:
+        description: 'ImmortalWrt TARGET'
+        default: 'aarch64'
+      subtarget:
+        description: 'ImmortalWrt SUBTARGET'
+        default: 'generic'
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      TZ: Asia/Shanghai
+      OPENWRT_BRANCH: ${{ inputs.ImmortalWrt_branch || 'v24.10.2' }}
+      TARGET: ${{ inputs.target || 'aarch64' }}
+      SUBTARGET: ${{ inputs.subtarget || 'generic' }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      MAKE_JOBS: 4
+
+    steps:
+      - name: "Step 1: Checkout Repository"
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: "Step 2: Install Dependencies"
+        id: install_deps
+        run: |
+          echo "🔧 Installing build dependencies..."
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3 python3-distutils rsync unzip \
+            file wget subversion zlib1g-dev ccache time xsltproc
+          echo "dependencies_installed=true" >> $GITHUB_OUTPUT
+
+      - name: "Step 3: Cache Setup"
+        id: cache
+        if: steps.install_deps.outputs.dependencies_installed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ImmortalWrt/dl
+            .ccache
+          key: dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ github.sha }}
+          restore-keys: |
+            dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-
+            dl-ccache-${{ env.OPENWRT_BRANCH }}-
+
+      - name: "Step 4: Clone ImmortalWrt"
+        id: clone_immortalwrt
+        if: steps.install_deps.outputs.dependencies_installed == 'true'
+        run: |
+          echo "🔄 Cloning ImmortalWrt repository..."
+          rm -rf ImmortalWrt
+          git clone --depth 1 -b "${OPENWRT_BRANCH}" https://github.com/ImmortalWrt/ImmortalWrt.git
+          echo "immortalwrt_cloned=true" >> $GITHUB_OUTPUT
+
+      - name: "Step 5: Add Package to ImmortalWrt Tree"
+        id: add_package
+        if: steps.clone_immortalwrt.outputs.immortalwrt_cloned == 'true'
+        run: |
+          echo "📦 Adding package to ImmortalWrt tree..."
+          mkdir -p ImmortalWrt/package/usb-redirector-server
+          if [ -f Makefile ] && grep -q "include \$(INCLUDE_DIR)/package.mk" Makefile; then
+            rsync -av --delete ./ ImmortalWrt/package/usb-redirector-server/ \
+              --exclude .git --exclude .github --exclude ImmortalWrt
+          elif [ -d usb-redirector-server ]; then
+            rsync -av --delete usb-redirector-server/ ImmortalWrt/package/usb-redirector-server/ \
+              --exclude .git --exclude .github --exclude ImmortalWrt
+          else
+            echo "❌ Package Makefile not found"
+            exit 1
+          fi
+          echo "package_added=true" >> $GITHUB_OUTPUT
+
+      - name: "Step 6: Prepare Feeds"
+        id: prepare_feeds
+        if: steps.add_package.outputs.package_added == 'true'
+        working-directory: ImmortalWrt
+        run: |
+          echo "🔄 Updating and installing feeds..."
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          echo "feeds_prepared=true" >> $GITHUB_OUTPUT
+
+      - name: "Step 7: Configure Build"
+        id: configure
+        if: steps.prepare_feeds.outputs.feeds_prepared == 'true'
+        working-directory: ImmortalWrt
+        run: |
+          echo "⚙️ Configuring build..."
+          cat > .config <<EOF
+          CONFIG_TARGET_${TARGET}=y
+          CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+          CONFIG_TARGET_BOARD="${TARGET}"
+          CONFIG_TARGET_SUBTARGET="${SUBTARGET}"
+          CONFIG_PACKAGE_usb-redirector-server=y
+          CONFIG_PACKAGE_kmod-usb-redirector-server=y
+          CONFIG_CCACHE=y
+          EOF
+          make defconfig
+          echo "build_configured=true" >> $GITHUB_OUTPUT
+
+      - name: "Step 8: Bootstrap System"
+        id: bootstrap
+        if: steps.configure.outputs.build_configured == 'true'
+        working-directory: ImmortalWrt
+        run: |
+          echo "🏗️ Bootstrapping system..."
+          make -j${MAKE_JOBS} tools/install
+          make -j${MAKE_JOBS} toolchain/install
+          make -j${MAKE_JOBS} target/linux/prepare
+          make -j${MAKE_JOBS} target/linux/compile
+          echo "system_bootstrapped=true" >> $GITHUB_OUTPUT
+
+      - name: "Step 9: Prepare USB Redirector Source"
+        id: prepare_source
+        if: steps.bootstrap.outputs.system_bootstrapped == 'true'
+        working-directory: ImmortalWrt
+        run: |
+          echo "🔧 Preparing USB redirector source..."
+          make package/usb-redirector-server/clean V=s
+          make package/usb-redirector-server/prepare V=s
+          echo "source_prepared=true" >> $GITHUB_OUTPUT
+
+      - name: "Step 10: Apply Kernel Patch"
+        id: apply_patch
+        if: steps.prepare_source.outputs.source_prepared == 'true'
+        working-directory: ImmortalWrt
+        run: |
+          echo "🔨 Applying kernel compatibility patch..."
+          mkdir -p package/usb-redirector-server/patches
+          cat <<'EOF' > package/usb-redirector-server/patches/001-kernel-compat.patch
+--- a/src/tusbd/cdev.c
++++ b/src/tusbd/cdev.c
+@@ -10,6 +10,12 @@
+ #include <linux/fs.h>
+ #include <linux/uaccess.h>
+ #include <linux/slab.h>
++#include <linux/version.h>
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++#define class_create(owner, name) class_create(name)
++#define DEV_UEVENT_CONST const
++#else
++#define DEV_UEVENT_CONST
++#endif
+ 
+ /* Original device uevent function */
+-static int dev_uevent(struct device *dev, struct kobj_uevent_env *env)
++static int dev_uevent(DEV_UEVENT_CONST struct device *dev, struct kobj_uevent_env *env)
+ {
+     add_uevent_var(env,"MODALIAS=usb-redirector");
+     return 0;
+ }
+EOF
+          echo "patch_applied=true" >> $GITHUB_OUTPUT
+
+      - name: "Step 11: Build USB Redirector Package"
+        id: build_package
+        if: steps.apply_patch.outputs.patch_applied == 'true'
+        working-directory: ImmortalWrt
+        run: |
+          echo "🚀 Building USB redirector package..."
+          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=sc 2>&1 | tee build.log
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            echo "build_successful=true" >> $GITHUB_OUTPUT
+            echo "✅ Build completed successfully"
+          else
+            echo "❌ Build failed. Last 100 lines of log:"
+            tail -n 100 build.log
+            exit 1
+          fi
+
+      - name: "Step 12: Collect Artifacts"
+        id: collect_artifacts
+        if: steps.build_package.outputs.build_successful == 'true'
+        working-directory: ImmortalWrt
+        run: |
+          echo "📦 Collecting build artifacts..."
+          mkdir -p "${GITHUB_WORKSPACE}/artifacts"
+          
+          # Find and copy IPK files
+          find bin/packages -type f -name '*usb-redirector*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          find bin/targets -type f -name '*usb-redirector*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          
+          if [ ! "$(ls -A "${GITHUB_WORKSPACE}/artifacts")" ]; then
+            echo "⚠️ No IPK files found!"
+            echo "Directory contents:"
+            ls -R bin/
+            exit 1
+          fi
+          
+          # Generate checksums
+          cd "${GITHUB_WORKSPACE}/artifacts"
+          sha256sum *.ipk > SHA256SUMS
+          echo "artifacts_collected=true" >> $GITHUB_OUTPUT
+          
+          echo "📋 Collected files:"
+          ls -lh
+
+      - name: "Step 13: Upload Build Artifacts"
+        id: upload_artifacts
+        if: steps.collect_artifacts.outputs.artifacts_collected == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}
+          path: artifacts/*
+          if-no-files-found: error
+
+      - name: "Step 14: Create GitHub Release"
+        id: create_release
+        if: steps.upload_artifacts.outputs.artifact_id != ''
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}"
+          tag_name: "build-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}-${{ github.run_id }}"
+          files: artifacts/*.ipk
+          body: |
+            USB Redirector Server Package for ImmortalWrt
+            
+            📦 Architecture: ${{ env.TARGET }}-${{ env.SUBTARGET }}
+            🔄 ImmortalWrt Branch: ${{ env.OPENWRT_BRANCH }}
+            ⏰ Build Time: ${{ github.event.repository.updated_at }}
+            👤 Builder: @${{ github.actor }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Step 15: Workflow Summary"
+        if: always()
+        run: |
+          echo "📋 Workflow Summary"
+          echo "=================="
+          echo "Target: ${{ env.TARGET }}-${{ env.SUBTARGET }}"
+          echo "Branch: ${{ env.OPENWRT_BRANCH }}"
+          echo "Status: ${{ job.status }}"
+          echo "Time: $(date)"
