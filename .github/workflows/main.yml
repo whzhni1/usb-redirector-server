@@ -1,4 +1,4 @@
-name: build-ImmortalWrt-usb-redirector-server-${{ inputs.target }}-${{ inputs.subtarget }}-debug
+name: build-ImmortalWrt-usb-redirector-server-${{ github.event.inputs.target }}-${{ github.event.inputs.subtarget }}-debug
 
 on:
   workflow_dispatch:
@@ -20,11 +20,11 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       TZ: Asia/Shanghai
-      OPENWRT_BRANCH: ${{ inputs.ImmortalWrt_branch || 'v24.10.2' }}
-      TARGET: ${{ inputs.target || 'aarch64' }}
-      SUBTARGET: ${{ inputs.subtarget || 'generic' }}
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      MAKE_JOBS: 4
+      OPENWRT_BRANCH: ${{ github.event.inputs.ImmortalWrt_branch }}
+      TARGET:           ${{ github.event.inputs.target }}
+      SUBTARGET:        ${{ github.event.inputs.subtarget }}
+      CCACHE_DIR:       ${{ github.workspace }}/.ccache
+      MAKE_JOBS:        4
 
     steps:
       - name: Checkout repository
@@ -112,9 +112,9 @@ jobs:
         run: |
           set -x
           mkdir -p "${GITHUB_WORKSPACE}/artifacts"
-          find bin/packages -type f -name '*usb-redirector-server*.ipk' \
+          find bin/packages  -type f -name '*usb-redirector-server*.ipk' \
             -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
-          find bin/targets  -type f -name '*usb-redirector-server*.ipk' \
+          find bin/targets   -type f -name '*usb-redirector-server*.ipk' \
             -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
           (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS)
           ls -lh "${GITHUB_WORKSPACE}/artifacts"
