@@ -121,44 +121,64 @@ jobs:
 +#else
 +#define DEV_UEVENT_CONST
 +#endif
-
-@@ -52,7 +58,7 @@
--    lIIIlII->dev_uevent=lIIllIII,
-+    lIIIlII->dev_uevent=lIIllIII,
-
-@@ -65,7 +71,7 @@
--static int lIIllIII(struct device *dev, struct kobj_uevent_env *env)
-+static int lIIllIII(DEV_UEVENT_CONST struct device *dev, struct kobj_uevent_env *env)
+ 
+ /* Original device uevent function */
+-static int dev_uevent(struct device *dev, struct kobj_uevent_env *env)
++static int dev_uevent(DEV_UEVENT_CONST struct device *dev, struct kobj_uevent_env *env)
  {
      add_uevent_var(env,"MODALIAS=usb-redirector");
      return 0;
  }
 EOF
 
+      - name: Verify patch and build environment
+        working-directory: ImmortalWrt
+        run: |
+          echo "📋 检查补丁文件..."
+          ls -l package/usb-redirector-server/patches/
+          cat package/usb-redirector-server/patches/001-kernel-compat.patch
+          
+          echo "🔍 检查构建环境..."
+          echo "当前目录内容:"
+          ls -la
+          echo "包目录内容:"
+          ls -la package/usb-redirector-server/
+
       - name: Build usb-redirector packages
         working-directory: ImmortalWrt
         run: |
-          # 添加更详细的日志输出
-          echo "Starting package compilation..."
-          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=s 2>&1 | tee build.log
+          echo "🚀 开始编译包..."
+          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=sc 2>&1 | tee build.log
           
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ Compilation failed. Check build.log for details"
+          if [ $? -ne 0 ]; then
+            echo "❌ 编译失败！显示最后100行日志："
             tail -n 100 build.log
             exit 1
           fi
           
-          echo "Starting package installation..."
-          make -j${MAKE_JOBS} package/usb-redirector-server/install V=s || true
+          echo "🔍 检查编译产物..."
+          find bin/ -name "*usb-redirector*.ipk"
+          
+          make -j${MAKE_JOBS} package/usb-redirector-server/install V=sc
 
       - name: Collect artifacts
         working-directory: ImmortalWrt
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/artifacts"
-          find bin/packages -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
-          find bin/targets -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
-          (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS || true)
-          echo "📦 收集到以下文件："
+          
+          echo "📦 查找并复制IPK文件..."
+          find bin/packages -type f -name '*usb-redirector*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          find bin/targets -type f -name '*usb-redirector*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \;
+          
+          if [ ! "$(ls -A "${GITHUB_WORKSPACE}/artifacts")" ]; then
+            echo "⚠️ 警告：未找到IPK文件！"
+            echo "显示bin目录结构："
+            ls -R bin/
+            exit 1
+          fi
+          
+          (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS)
+          echo "📦 收集到的文件："
           ls -lh "${GITHUB_WORKSPACE}/artifacts"
 
       - name: Upload artifacts
@@ -166,8 +186,8 @@ EOF
         with:
           name: usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}
           path: artifacts/*
-          if-no-files-found: warn
-          
+          if-no-files-found: error
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         if: success()
@@ -176,9 +196,9 @@ EOF
           tag_name: "build-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}-${{ github.run_id }}"
           files: artifacts/*.ipk
           body: |
-            自动构建的 usb-redirector-server 包  
-            架构: ${{ env.TARGET }}-${{ env.SUBTARGET }}  
-            OpenWrt 分支: ${{ env.OPENWRT_BRANCH }}  
+            自动构建的 usb-redirector-server 包
+            架构: ${{ env.TARGET }}-${{ env.SUBTARGET }}
+            OpenWrt 分支: ${{ env.OPENWRT_BRANCH }}
             构建时间: ${{ github.run_started_at }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
