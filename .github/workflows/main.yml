@@ -138,7 +138,17 @@ EOF
       - name: Build usb-redirector packages
         working-directory: ImmortalWrt
         run: |
-          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=s
+          # 添加更详细的日志输出
+          echo "Starting package compilation..."
+          make -j${MAKE_JOBS} package/usb-redirector-server/compile V=s 2>&1 | tee build.log
+          
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "❌ Compilation failed. Check build.log for details"
+            tail -n 100 build.log
+            exit 1
+          fi
+          
+          echo "Starting package installation..."
           make -j${MAKE_JOBS} package/usb-redirector-server/install V=s || true
 
       - name: Collect artifacts
