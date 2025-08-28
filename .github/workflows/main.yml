@@ -132,38 +132,21 @@ jobs:
           make package/usb-redirector-server/prepare V=s
           echo "source_prepared=true" >> $GITHUB_OUTPUT
 
-      - name: "Step 10: Apply Kernel Patch"
+      - name: "Step 10: Copy and Apply Kernel Patch"
         id: apply_patch
         if: steps.prepare_source.outputs.source_prepared == 'true'
         working-directory: ImmortalWrt
         run: |
-          echo "🔨 Applying kernel compatibility patch..."
+          echo "🔨 Copying and applying kernel compatibility patch..."
           mkdir -p package/usb-redirector-server/patches
-          cat <<'EOF' > package/usb-redirector-server/patches/001-kernel-compat.patch
---- a/src/tusbd/cdev.c
-+++ b/src/tusbd/cdev.c
-@@ -10,6 +10,12 @@
- #include <linux/fs.h>
- #include <linux/uaccess.h>
- #include <linux/slab.h>
-+#include <linux/version.h>
-+
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
-+#define class_create(owner, name) class_create(name)
-+#define DEV_UEVENT_CONST const
-+#else
-+#define DEV_UEVENT_CONST
-+#endif
- 
- /* Original device uevent function */
--static int dev_uevent(struct device *dev, struct kobj_uevent_env *env)
-+static int dev_uevent(DEV_UEVENT_CONST struct device *dev, struct kobj_uevent_env *env)
- {
-     add_uevent_var(env,"MODALIAS=usb-redirector");
-     return 0;
- }
-EOF
-          echo "patch_applied=true" >> $GITHUB_OUTPUT
+          cp ${GITHUB_WORKSPACE}/patches/001-kernel-compat.patch package/usb-redirector-server/patches/
+          if [ $? -eq 0 ]; then
+            echo "✅ Patch file copied successfully"
+            echo "patch_applied=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Failed to copy patch file"
+            exit 1
+          fi
 
       - name: "Step 11: Build USB Redirector Package"
         id: build_package
