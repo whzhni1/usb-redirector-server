@@ -1,35 +1,48 @@
 --- a/src/tusbd/cdev.c
 +++ b/src/tusbd/cdev.c
-@@ -10,6 +10,7 @@
+@@ -10,6 +10,19 @@
  #include <linux/fs.h>
  #include <linux/uaccess.h>
  #include <linux/slab.h>
 +#include <linux/version.h>
++
++/* 定义版本相关的宏和类型 */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++#define USB_REDIRECTOR_CLASS_CREATE(owner, name) class_create(name)
++#define DEV_UEVENT_CONST const
++typedef int (*dev_uevent_fn)(const struct device *, struct kobj_uevent_env *);
++#else
++#define USB_REDIRECTOR_CLASS_CREATE(owner, name) class_create(owner, name)
++#define DEV_UEVENT_CONST
++typedef int (*dev_uevent_fn)(struct device *, struct kobj_uevent_env *);
++#endif
++
  
  static struct class *lIIIlII;
  static struct mutex lIIIlIl;
-@@ -40,7 +41,11 @@ static int lIIllIII(struct device *dev, struct kobj_uevent_env *env)
+@@ -35,7 +48,7 @@ static struct file_operations lIIIlIIl={
+     .unlocked_ioctl=lIIllIlI,
+ };
+ 
+-static int lIIllIII(struct device *dev, struct kobj_uevent_env *env)
++static int lIIllIII(DEV_UEVENT_CONST struct device *dev, struct kobj_uevent_env *env)
+ {
+     add_uevent_var(env,"MODALIAS=usb-redirector");
+     return 0;
+@@ -44,14 +57,14 @@ static int lIIllIII(struct device *dev, struct kobj_uevent_env *env)
  #define IIllIII _IOW(0xF5,0,typeof(struct IIlIlII))
  
  static int lIIlllllI(void) {
 -    if((lIIIlII=class_create(THIS_MODULE,IIIllII))==NULL) {
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
-+    if((lIIIlII=class_create(IIIllII))==NULL) {
-+#else
-+    if((lIIIlII=class_create(THIS_MODULE, IIIllII))==NULL) {
-+#endif
++    if((lIIIlII=USB_REDIRECTOR_CLASS_CREATE(THIS_MODULE,IIIllII))==NULL) {
          return -ENOMEM;
      }
      
-@@ -49,7 +54,11 @@ static int lIIlllllI(void) {
+     mutex_init(&lIIIlIl);
      cdev_init(&lIIIlIII,&lIIIlIIl);
      lIIIlIII.owner=THIS_MODULE;
-     
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
-+    lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;
-+#else
-     lIIIlII->dev_uevent=lIIllIII;
-+#endif
+-    lIIIlII->dev_uevent=lIIllIII;
++    lIIIlII->dev_uevent=(dev_uevent_fn)lIIllIII;
      
      if(cdev_add(&lIIIlIII,MKDEV(lIIIlI,0),1)<0) {
          class_destroy(lIIIlII);
