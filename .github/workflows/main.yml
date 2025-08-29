@@ -21,7 +21,7 @@ jobs:
           - arch: "ath79-generic"
             sdk: "https://downloads.openwrt.org/releases/24.10.2/targets/ath79/generic/openwrt-sdk-24.10.2-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
           - arch: "mediatek-filogic"
-            sdk: "https://downloads.openwrt.org/releases/24.10.2/targets/mediatek/filogic/openwrt-sdk-24.10.2-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+            sdk: "https://downloads.openwrt.org/releases/24.10.2/targets/mediatek/filogic/openwrt-sdk-24.10.2-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
 
     env:
       PACKAGE_NAME: usb-redirector-server
