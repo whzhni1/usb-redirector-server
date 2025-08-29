@@ -1,16 +1,25 @@
-name: build-ImmortalWrt-usb-redirector-aarch64-debug
+name: build-openwrt-usb-redirector-aarch64-debug
 
 on:
   workflow_dispatch:
     inputs:
-      ImmortalWrt_branch:
-        description: 'ImmortalWrt branch or tag'
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      _branch:
+        description: 'openwrt branch or tag'
         default: 'v24.10.2'
       target:
-        description: 'ImmortalWrt TARGET'
+        description: 'openwrt TARGET'
         default: 'aarch64'
       subtarget:
-        description: 'ImmortalWrt SUBTARGET'
+        description: 'openwrt SUBTARGET'
         default: 'generic'
   push:
   pull_request:
@@ -20,7 +29,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       TZ: Asia/Shanghai
-      OPENWRT_BRANCH: ${{ inputs.ImmortalWrt_branch || 'v24.10.2' }}
+      OPENWRT_BRANCH: ${{ inputs.openwrt_branch || 'v24.10.2' }}
       TARGET: ${{ inputs.target || 'aarch64' }}
       SUBTARGET: ${{ inputs.subtarget || 'generic' }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -43,40 +52,40 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ImmortalWrt/dl
+            openwrt/dl
             .ccache
           key: dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ github.sha }}
           restore-keys: |
             dl-ccache-${{ env.OPENWRT_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-
             dl-ccache-${{ env.OPENWRT_BRANCH }}-
 
-      - name: Clone ImmortalWrt
+      - name: Clone openwrt
         run: |
           set -x
-          rm -rf ImmortalWrt
-          git clone --depth 1 -b "${OPENWRT_BRANCH}" https://github.com/ImmortalWrt/ImmortalWrt.git
+          rm -rf openwrt
+          git clone --depth 1 -b "${OPENWRT_BRANCH}" https://github.com/openwrt/openwrt.git
 
-      - name: Add package into ImmortalWrt tree # 针对你的仓库结构进行修改
+      - name: Add package into openwrt tree # 针对你的仓库结构进行修改
         run: |
           set -x
-          mkdir -p ImmortalWrt/package/usb-redirector-server
+          mkdir -p openwrt/package/usb-redirector-server
           # 你的仓库根目录就是 usb-redirector-server 包的根目录
-          # 将当前仓库的所有内容 (除了 .git, .github 和 ImmortalWrt 目录本身)
-          # 直接复制到 ImmortalWrt/package/usb-redirector-server/
-          rsync -a --delete . ImmortalWrt/package/usb-redirector-server/ \
-            --exclude .git --exclude .github --exclude ImmortalWrt
-          echo "内容已复制到 ImmortalWrt/package/usb-redirector-server/"
-          ls -R ImmortalWrt/package/usb-redirector-server || true # 再次确认复制内容
+          # 将当前仓库的所有内容 (除了 .git, .github 和 openwrt 目录本身)
+          # 直接复制到 openwrt/package/usb-redirector-server/
+          rsync -a --delete . openwrt/package/usb-redirector-server/ \
+            --exclude .git --exclude .github --exclude openwrt
+          echo "内容已复制到 openwrt/package/usb-redirector-server/"
+          ls -R openwrt/package/usb-redirector-server || true # 再次确认复制内容
 
       - name: Prepare feeds
-        working-directory: ImmortalWrt
+        working-directory: openwrt
         run: |
           set -x
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Configure target and packages
-        working-directory: ImmortalWrt
+        working-directory: openwrt
         run: |
           set -x
           # 确保 .config 文件中正确启用 usb-redirector-server
@@ -104,7 +113,7 @@ jobs:
           grep -E "CONFIG_TARGET_${TARGET}_${SUBTARGET}" .config || true
 
       - name: Bootstrap toolchain & kernel
-        working-directory: ImmortalWrt
+        working-directory: openwrt
         run: |
           set -x
           make -j${MAKE_JOBS} tools/install V=s
@@ -113,7 +122,7 @@ jobs:
           make -j${MAKE_JOBS} target/linux/compile V=s
 
       - name: Prepare usb-redirector-server source
-        working-directory: ImmortalWrt
+        working-directory: openwrt
         run: |
           set -x
           # 增加 V=s 获取详细日志，有助于调试 clean 或 prepare 失败的原因
@@ -123,7 +132,7 @@ jobs:
           find build_dir -maxdepth 3 -type d -name 'usb-redirector-server-*' || true
 
       - name: Build usb-redirector packages
-        working-directory: ImmortalWrt
+        working-directory: openwrt
         if: always()
         continue-on-error: true
         run: |
@@ -137,7 +146,7 @@ jobs:
           find bin/targets -type f -name '*usb-redirector-server*.ipk' || true
 
       - name: Collect artifacts
-        working-directory: ImmortalWrt
+        working-directory: openwrt
         if: always()
         run: |
           set -x
