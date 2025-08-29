@@ -70,10 +70,22 @@ endef
 PKG_ARCH_DIR:=$(shell echo $(call qstrip,$(CONFIG_ARCH))-$(call qstrip,$(CONFIG_TARGET_SUFFIX))$(if $(CONFIG_SOFT_FLOAT),,hf) | tr '[:upper:]' '[:lower:]')
 #$(if ,,$(error ERROR: There are no USB Redirector binaries for this system. Please contact support.))
 
-# 兼容 mediatek/filogic 等没有 target suffix 的情况
+# ========== 新增映射规则 ==========
+# 如果编译出来是纯 aarch64，则映射到 aarch64-gnueabi
 ifeq ($(PKG_ARCH_DIR),aarch64)
   PKG_ARCH_DIR := aarch64-gnueabi
 endif
+
+ifeq ($(PKG_ARCH_DIR),aarch64-muslhf)
+  PKG_ARCH_DIR := aarch64-gnueabi
+endif
+
+# 也可以顺便加个反向映射，防止以后出现其他小写差异
+ifeq ($(PKG_ARCH_DIR),aarch64_be)
+  PKG_ARCH_DIR := aarch64-gnueabi
+endif
+# ==================================
+
 
 define Package/usb-redirector-server/install
 	$(INSTALL_DIR) $(1)/usr/bin
