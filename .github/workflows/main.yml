@@ -56,13 +56,15 @@ jobs:
           rm -rf ImmortalWrt
           git clone --depth 1 -b "${OPENWRT_BRANCH}" https://github.com/ImmortalWrt/ImmortalWrt.git
 
-      - name: Add package into ImmortalWrt tree # 简化并明确复制路径
+      - name: Add package into ImmortalWrt tree # 针对你的仓库结构进行修改
         run: |
           set -x
           mkdir -p ImmortalWrt/package/usb-redirector-server
-          # 假设当前仓库的 usb-redirector-server 子目录包含 OpenWrt 包的所有内容
-          # 将该子目录的内容直接复制到 ImmortalWrt/package/usb-redirector-server/
-          rsync -a --delete usb-redirector-server/ ImmortalWrt/package/usb-redirector-server/
+          # 你的仓库根目录就是 usb-redirector-server 包的根目录
+          # 将当前仓库的所有内容 (除了 .git, .github 和 ImmortalWrt 目录本身)
+          # 直接复制到 ImmortalWrt/package/usb-redirector-server/
+          rsync -a --delete . ImmortalWrt/package/usb-redirector-server/ \
+            --exclude .git --exclude .github --exclude ImmortalWrt
           echo "内容已复制到 ImmortalWrt/package/usb-redirector-server/"
           ls -R ImmortalWrt/package/usb-redirector-server || true # 再次确认复制内容
 
@@ -94,18 +96,10 @@ jobs:
           CONFIG_CCACHE=y
 
           # 确保 USB 支持相关的内核选项被启用，这是 kmod-usb-redirector-server 的前置条件
-          # 通常 defconfig 会处理大部分，但这里明确一下
-          # 请根据实际情况调整或添加必要的 USB 相关配置
           CONFIG_KERNEL_USB_SUPPORT=y
-          # 假设 kmod 依赖 CONFIG_USB_STORAGE 等，这里需要根据 usb-redirector-server 的 Makefile
-          # 或者其 Kconfig 文件来判断具体需要哪些内核选项。
-          # 通常 OpenWrt 的 make defconfig 会自动拉取依赖的内核模块配置，但如果仍然有问题，
-          # 可能需要手动添加更多 CONFIG_KERNEL_xxx=y 的行。
           EOF
           
-          # make defconfig 会根据 .config 文件和包的依赖关系生成最终的 .config
           make defconfig
-          # 打印 .config 的相关部分，方便调试
           grep -E "CONFIG_PACKAGE_usb-redirector-server|CONFIG_PACKAGE_kmod-usb-redirector-server|CONFIG_KERNEL_USB" .config || true
           grep -E "CONFIG_TARGET_${TARGET}_${SUBTARGET}" .config || true
 
@@ -118,34 +112,29 @@ jobs:
           make -j${MAKE_JOBS} target/linux/prepare V=s
           make -j${MAKE_JOBS} target/linux/compile V=s
 
-      - name: Prepare usb-redirector-server source # 移除 V=s 以免太详细
+      - name: Prepare usb-redirector-server source
         working-directory: ImmortalWrt
         run: |
           set -x
-          make package/usb-redirector-server/clean
-          make package/usb-redirector-server/prepare
+          # 增加 V=s 获取详细日志，有助于调试 clean 或 prepare 失败的原因
+          make package/usb-redirector-server/clean V=s
+          make package/usb-redirector-server/prepare V=s
           echo "在 build_dir 中查找 usb-redirector-server 的源代码目录："
           find build_dir -maxdepth 3 -type d -name 'usb-redirector-server-*' || true
-          # 打印 make package/usb-redirector-server/prepare 过程的详细日志，用于调试
-          # make package/usb-redirector-server/prepare V=99  # 如果需要更详细的日志，可以加上 V=99
 
-      - name: Build usb-redirector packages # 确保即使失败也尝试收集日志和文件
+      - name: Build usb-redirector packages
         working-directory: ImmortalWrt
         if: always()
-        continue-on-error: true # 允许此步骤失败，以便后续步骤可以收集日志
+        continue-on-error: true
         run: |
           set -x
           echo "尝试编译 usb-redirector-server 包..."
-          # 使用 V=s 或 V=99 获取详细的编译日志，这对于调试非常重要
           make -j${MAKE_JOBS} package/usb-redirector-server/compile V=s || true
           echo "尝试安装 usb-redirector-server 包..."
           make -j${MAKE_JOBS} package/usb-redirector-server/install V=s || true
           echo "编译和安装完成，检查生成的文件..."
           find bin/packages -type f -name '*usb-redirector-server*.ipk' || true
           find bin/targets -type f -name '*usb-redirector-server*.ipk' || true
-          # 打印完整的编译日志
-          # 如果编译失败，日志会非常有用
-          # cat logs/package/usb-redirector-server/* || true
 
       - name: Collect artifacts
         working-directory: ImmortalWrt
@@ -153,17 +142,12 @@ jobs:
         run: |
           set -x
           mkdir -p "${GITHUB_WORKSPACE}/artifacts"
-          # 优先从 bin/packages 查找，这是 OpenWrt 包的标准输出路径
           find bin/packages -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \; || true
-          # 确保如果特殊情况下在 bin/targets 中也找到了，也能复制
           find bin/targets  -type f -name '*usb-redirector-server*.ipk' -exec cp -v {} "${GITHUB_WORKSPACE}/artifacts/" \; || true
           
-          # 检查artifacts目录是否为空，如果为空则打印提示
           if [ -z "$(ls -A "${GITHUB_WORKSPACE}/artifacts")" ]; then
             echo "⚠️ 未找到任何 usb-redirector-server ipk 文件。"
             echo "请检查上一步骤的编译日志以获取更多信息。"
-            # 可以在这里添加更多调试信息，例如：
-            # find . -name '*usb-redirector-server*.ipk' # 再次尝试在整个 ImmortalWrt 目录下查找
           else
             echo "已找到 ipk 文件，生成 SHA256SUMS。"
             (cd "${GITHUB_WORKSPACE}/artifacts" && sha256sum *.ipk > SHA256SUMS || true)
@@ -176,15 +160,15 @@ jobs:
         with:
           name: usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}
           path: artifacts/*
-          if-no-files-found: warn # 如果没有文件，发出警告而不是失败
+          if-no-files-found: warn
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
-        if: always() # 即使编译失败也尝试创建 Release，但如果 artifacts 目录为空，不会上传文件
+        if: always()
         with:
           name: "usb-redirector-server-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}"
           tag_name: "build-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ env.OPENWRT_BRANCH }}-${{ github.run_id }}"
-          files: artifacts/* # 只有 artifacts 目录有文件时才会上传
+          files: artifacts/*
           body: |
             自动构建的 usb-redirector-server 包  
             架构: ${{ env.TARGET }}-${{ env.SUBTARGET }}  
