@@ -71,6 +71,16 @@ jobs:
           mkdir -p package/${PACKAGE_NAME}
           rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
           make defconfig
+
+      - name: Install OpenWrt host python3 + setuptools
+        run: |
+          cd "$SDK_PATH"
+          make package/python3/host/install -j$(nproc) V=sc || make package/python3/host/install V=sc
+          make package/python3-setuptools/host/install -j$(nproc) V=sc || make package/python3-setuptools/host/install V=sc
+          export PATH="$SDK_PATH/staging_dir/host/bin:$SDK_PATH/staging_dir/hostpkg/bin:$PATH"
+          which python3 || true
+          python3 -c 'import sys; print("Host python3:", sys.executable)' || true
+          python3 -c 'import setuptools, sys; print("setuptools:", setuptools.__version__, "at", setuptools.__file__)' || true   
       # 这里插入删除 uboot-mediatek 的步骤
       - name: Disable uboot-mediatek
         run: |
