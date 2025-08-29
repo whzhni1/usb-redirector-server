@@ -71,7 +71,12 @@ jobs:
           mkdir -p package/${PACKAGE_NAME}
           rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
           make defconfig
+      # 这里插入删除 uboot-mediatek 的步骤
+      - name: Disable uboot-mediatek
+        run: |
+          cd "$SDK_PATH"
           rm -rf feeds/base/package/uboot-mediatek
+          echo "Removed uboot-mediatek to skip its prereq check"
 
       # 新增 1：强制给 SDK 的 host Python 安装 pip & setuptools（带 get-pip.py 回退）
       - name: Force-install setuptools into SDK host python
