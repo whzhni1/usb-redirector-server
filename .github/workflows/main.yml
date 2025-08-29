@@ -68,7 +68,8 @@ jobs:
           ./scripts/feeds install -a
           mkdir -p package/${PACKAGE_NAME}
           rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
-          make defconfig  # 避免 menuconfig 交互
+          make defconfig
+
       - name: Build package
         run: |
           cd "$SDK_PATH"
