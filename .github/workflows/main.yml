@@ -67,6 +67,9 @@ jobs:
         run: |
           cd "$SDK_PATH"
           ./scripts/feeds update -a
+          # 在安装所有 feeds 后立即禁用 uboot-mediatek
+          rm -rf feeds/base/uboot-mediatek
+          echo "Removed uboot-mediatek to skip its prereq check"
           ./scripts/feeds install -a
           mkdir -p package/${PACKAGE_NAME}
           rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
