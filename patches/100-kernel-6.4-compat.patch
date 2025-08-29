@@ -1,0 +1,20 @@
+--- a/src/tusbd/cdev.c
++++ b/src/tusbd/cdev.c
+@@ -40,7 +40,13 @@
+     mutex_init(&lIIIlIl);
+-    lIIIlII = class_create(THIS_MODULE, IIIllII);
++    #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++    lIIIlII = class_create(IIIllII);
++    #else
++    lIIIlII = class_create(THIS_MODULE, IIIllII);
++    #endif
+
+     if (lIIIlII == NULL) return -1;
+@@ -51,7 +57,13 @@
+     lIIIlII->devnode = lIIllIlI;
+-    lIIIlII->dev_uevent = lIIllIII;
++    #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++    lIIIlII->dev_uevent = (int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;
++    #else
++    lIIIlII->dev_uevent = lIIllIII;
++    #endif
