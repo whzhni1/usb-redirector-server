@@ -20,7 +20,7 @@ jobs:
             sdk: "https://downloads.openwrt.org/releases/23.05.5/targets/ramips/mt7621/openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
           - arch: "ath79-generic"
             sdk: "https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-          - arch: "mediatek/filogic"
+          - arch: "aarch64-gnueabi"
             sdk: "https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     env:
       PACKAGE_NAME: usb-redirector-server
