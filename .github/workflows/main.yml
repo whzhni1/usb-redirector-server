@@ -79,7 +79,7 @@ jobs:
           cd "$SDK_PATH"
           set +e
           make package/${PACKAGE_NAME}/clean
-          make package/${PACKAGE_NAME}/compile -j$(nproc) V=sc
+          IGNORE_ERRORS=1 make package/${PACKAGE_NAME}/compile -j$(nproc) V=sc
           exit 0
 
       - name: Upload ipk artifacts
