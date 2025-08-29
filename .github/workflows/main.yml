@@ -63,35 +63,31 @@ jobs:
           key: dl-toolchain-${{ matrix.arch }}-${{ hashFiles('**/feeds.conf.default') }}
           restore-keys: dl-toolchain-${{ matrix.arch }}-
 
-      - name: Prepare package
+      - name: Prepare package and Disable uboot-mediatek
         run: |
           cd "$SDK_PATH"
           ./scripts/feeds update -a
-          # 在安装所有 feeds 后立即禁用 uboot-mediatek
-          rm -rf feeds/base/uboot-mediatek
-          echo "Removed uboot-mediatek to skip its prereq check"
+          # 在安装 feeds 之前或之后，确保删除 uboot-mediatek
+          # 尝试在 update 后立即删除
+          rm -rf feeds/base/package/uboot-mediatek || true # 使用 || true 避免删除不存在的目录时报错
+          echo "Removed uboot-mediatek from feeds/base/package to skip its prereq check"
+
           ./scripts/feeds install -a
+
+          # 再次尝试删除，以防 install -a 重新拉取
+          rm -rf feeds/base/package/uboot-mediatek || true
+          echo "Re-checked and removed uboot-mediatek after feeds install"
+
           mkdir -p package/${PACKAGE_NAME}
           rsync -a --delete "$GITHUB_WORKSPACE"/ package/${PACKAGE_NAME}/
           make defconfig
 
-      - name: Install OpenWrt host python3 + setuptools
-        run: |
-          cd "$SDK_PATH"
-          make package/python3/host/install -j$(nproc) V=sc || make package/python3/host/install V=sc
-          make package/python3-setuptools/host/install -j$(nproc) V=sc || make package/python3-setuptools/host/install V=sc
-          export PATH="$SDK_PATH/staging_dir/host/bin:$SDK_PATH/staging_dir/hostpkg/bin:$PATH"
-          which python3 || true
-          python3 -c 'import sys; print("Host python3:", sys.executable)' || true
-          python3 -c 'import setuptools, sys; print("setuptools:", setuptools.__version__, "at", setuptools.__file__)' || true   
-      # 这里插入删除 uboot-mediatek 的步骤
-      - name: Disable uboot-mediatek
-        run: |
-          cd "$SDK_PATH"
-          rm -rf feeds/base/package/uboot-mediatek
-          echo "Removed uboot-mediatek to skip its prereq check"
+          # 确保在 .config 中禁用它
+          sed -i '/CONFIG_PACKAGE_uboot-mediatek/d' .config || true
+          echo "# CONFIG_PACKAGE_uboot-mediatek is not set" >> .config || true
+          # 重新生成 defconfig，确保更改生效
+          make defconfig
 
-      # 新增 1：强制给 SDK 的 host Python 安装 pip & setuptools（带 get-pip.py 回退）
       - name: Force-install setuptools into SDK host python
         run: |
           set -eux
@@ -110,14 +106,18 @@ jobs:
             "$HOST_PY" -m pip install --upgrade pip setuptools wheel
             PATH="$SDK_PATH/staging_dir/host/bin:$SDK_PATH/staging_dir/hostpkg/bin:$PATH" \
             "$HOST_PY" -c 'import sys,setuptools; print("Host Python:", sys.executable); print("setuptools OK:", setuptools.__version__)'
+          else
+            echo "Warning: No host python found in SDK staging_dir. This might cause issues."
           fi
 
-
-      # 新增 2：在构建步骤前显式优先 PATH 指向 SDK host，可帮助 prereq 检查找到刚装的 setuptools
       - name: Build package
         run: |
           cd "$SDK_PATH"
           export PATH="$SDK_PATH/staging_dir/host/bin:$SDK_PATH/staging_dir/hostpkg/bin:$PATH"
+          echo "Verifying host python and setuptools before final build:"
+          which python3 || true
+          python3 -c 'import sys; print("Host python3:", sys.executable)' || true
+          python3 -c 'import setuptools, sys; print("setuptools:", setuptools.__version__, "at", setuptools.__file__)' || true
           set +e
           make package/${PACKAGE_NAME}/clean
           IGNORE_ERRORS=1 make package/${PACKAGE_NAME}/compile -j$(nproc) V=sc
