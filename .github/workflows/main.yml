@@ -1,4 +1,4 @@
-name: Build USB Redirector Server for OpenWrt
+name: Build USB Redirector Server IPK Packages
 
 on:
   push:
@@ -11,7 +11,7 @@ env:
   OPENWRT_VERSION: v23.05.3
 
 jobs:
-  build:
+  build-ipk:
     runs-on: ubuntu-22.04
     
     strategy:
@@ -23,6 +23,8 @@ jobs:
             config: CONFIG_TARGET_ramips=y\nCONFIG_TARGET_ramips_mt7621=y
           - arch: ath79_generic
             config: CONFIG_TARGET_ath79=y\nCONFIG_TARGET_ath79_generic=y
+          - arch: mediatek_filogic
+            config: CONFIG_TARGET_mediatek=y\nCONFIG_TARGET_mediatek_filogic=y
 
     steps:
     - name: Checkout repository
@@ -33,6 +35,8 @@ jobs:
         sudo rm -rf /usr/share/dotnet
         sudo rm -rf /usr/local/lib/android
         sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache
+        sudo docker image prune -af
 
     - name: Setup build environment
       run: |
@@ -51,7 +55,12 @@ jobs:
 
     - name: Copy USB Redirector package
       run: |
-        cp -r ./usb-redirector-server openwrt/package/
+        if [ -d "./usb-redirector-server" ]; then
+          cp -r ./usb-redirector-server openwrt/package/
+        else
+          echo "Warning: usb-redirector-server directory not found in repository"
+          exit 1
+        fi
 
     - name: Update and install feeds
       run: |
@@ -59,20 +68,20 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Configure OpenWrt build
+    - name: Configure for package building
       run: |
         cd openwrt
         
-        # Create base configuration
+        # Create minimal configuration for package building
         echo -e "${{ matrix.target.config }}" > .config
         
-        # Add USB Redirector packages configuration
+        # Enable USB Redirector packages
         cat >> .config << EOF
         # USB Redirector Server packages
-        CONFIG_PACKAGE_usb-redirector-server=y
-        CONFIG_PACKAGE_kmod-usb-redirector-server=y
+        CONFIG_PACKAGE_usb-redirector-server=m
+        CONFIG_PACKAGE_kmod-usb-redirector-server=m
         
-        # USB Support
+        # USB Support modules
         CONFIG_USB_SUPPORT=y
         CONFIG_PACKAGE_kmod-usb-core=y
         CONFIG_PACKAGE_kmod-usb-ohci=y
@@ -80,112 +89,174 @@ jobs:
         CONFIG_PACKAGE_kmod-usb2=y
         CONFIG_PACKAGE_kmod-usb3=y
         
-        # Build packages
+        # Build as packages
         CONFIG_ALL_KMODS=y
-        CONFIG_ALL_NONSHARED=y
+        CONFIG_DEVEL=y
+        CONFIG_CCACHE=y
         EOF
         
-        # Expand configuration with defaults
         make defconfig
 
-    - name: Download dependencies
+    - name: Download package dependencies
       run: |
         cd openwrt
         make download -j8 V=s
 
-    - name: Build OpenWrt full
+    - name: Build tools and toolchain
       run: |
         cd openwrt
-        make -j$(nproc) V=s
+        make tools/install -j$(nproc) V=s
+        make toolchain/install -j$(nproc) V=s
 
-    - name: Build USB Redirector package only (fallback)
-      if: failure()
+    - name: Build USB Redirector packages
       run: |
         cd openwrt
-        make package/usb-redirector-server/clean
-        make package/usb-redirector-server/prepare
-        make package/usb-redirector-server/compile V=99
-        make package/usb-redirector-server/install
+        
+        # Clean any previous builds
+        make package/usb-redirector-server/clean V=s
+        
+        # Build the packages
+        make package/usb-redirector-server/prepare V=s
+        make package/usb-redirector-server/compile V=s
+        make package/usb-redirector-server/install V=s
+        
+        # Also try to build kernel module if separate
+        make package/kernel/linux/compile V=s || true
 
-    - name: Collect build artifacts
+    - name: Collect IPK packages
       run: |
         cd openwrt
-        mkdir -p artifacts
+        mkdir -p ../artifacts/${{ matrix.target.arch }}
         
         # Find and copy USB Redirector packages
-        find bin/ -name "*usb-redirector-server*.ipk" -exec cp {} artifacts/ \;
-        find bin/ -name "*kmod-usb-redirector-server*.ipk" -exec cp {} artifacts/ \;
+        echo "Searching for USB Redirector packages..."
+        find bin/ -name "*usb-redirector-server*.ipk" -type f | while read file; do
+          echo "Found: $file"
+          cp "$file" ../artifacts/${{ matrix.target.arch }}/
+        done
         
-        # List found packages
-        ls -la artifacts/
+        find bin/ -name "*kmod-usb-redirector-server*.ipk" -type f | while read file; do
+          echo "Found: $file"  
+          cp "$file" ../artifacts/${{ matrix.target.arch }}/
+        done
+        
+        # List all found packages
+        echo "Collected packages for ${{ matrix.target.arch }}:"
+        ls -la ../artifacts/${{ matrix.target.arch }}/
+        
+        # Create package info
+        cat > ../artifacts/${{ matrix.target.arch }}/README.txt << EOF
+        USB Redirector Server IPK Packages for ${{ matrix.target.arch }}
+        Built on: $(date)
+        OpenWrt Version: ${{ env.OPENWRT_VERSION }}
+        
+        Installation Instructions:
+        1. Transfer both files to your OpenWrt device
+        2. Install kernel module first: opkg install kmod-usb-redirector-server-*.ipk
+        3. Install server package: opkg install usb-redirector-server-*.ipk
+        4. Start service: service usb-redirector-server start && service usb-redirector-server enable
+        EOF
 
-    - name: Upload artifacts
+    - name: Upload IPK artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: usb-redirector-${{ matrix.target.arch }}
-        path: openwrt/artifacts/*.ipk
+        name: usb-redirector-ipk-${{ matrix.target.arch }}
+        path: artifacts/${{ matrix.target.arch }}/*
         retention-days: 30
 
-  release:
-    needs: build
+    - name: Verify packages exist
+      run: |
+        echo "Verifying packages were built for ${{ matrix.target.arch }}:"
+        if [ ! -d "artifacts/${{ matrix.target.arch }}" ] || [ -z "$(ls -A artifacts/${{ matrix.target.arch }}/*.ipk 2>/dev/null)" ]; then
+          echo "ERROR: No IPK packages found for ${{ matrix.target.arch }}"
+          echo "Build may have failed. Checking bin directory structure:"
+          find openwrt/bin/ -name "*.ipk" | head -20
+          exit 1
+        else
+          echo "SUCCESS: IPK packages found"
+          ls -la artifacts/${{ matrix.target.arch }}/
+        fi
+
+  package-release:
+    needs: build-ipk
     runs-on: ubuntu-22.04
-    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
-      
-    - name: Create release
+      with:
+        path: all-packages
+
+    - name: Organize packages
+      run: |
+        mkdir -p release-packages
+        
+        # Copy all IPK files to release directory
+        find all-packages/ -name "*.ipk" -exec cp {} release-packages/ \;
+        
+        # Create release notes
+        cat > release-packages/INSTALLATION.md << 'EOF'
+        # USB Redirector Server IPK Packages
+        
+        This release contains pre-built IPK packages for multiple OpenWrt architectures.
+        
+        ## Available Architectures
+        - x86_64 (PC/VM builds)
+        - ramips_mt7621 (MT7621 routers)
+        - ath79_generic (AR71xx/AR724x/AR913x/AR933x routers)
+        - mediatek_filogic (MT7986/MT7981 routers)
+        
+        ## Installation Instructions
+        
+        1. **Identify your device architecture** and download the corresponding files:
+           - `kmod-usb-redirector-server-<version>-<arch>.ipk` (kernel module)
+           - `usb-redirector-server-<version>-<arch>.ipk` (server application)
+        
+        2. **Transfer files to your OpenWrt device:**
+           ```bash
+           scp *.ipk root@your-router-ip:/tmp/
+           ```
+        
+        3. **Install packages (kernel module MUST be installed first):**
+           ```bash
+           ssh root@your-router-ip
+           opkg install /tmp/kmod-usb-redirector-server-*.ipk
+           opkg install /tmp/usb-redirector-server-*.ipk
+           ```
+        
+        4. **Start and enable the service:**
+           ```bash
+           /etc/init.d/usb-redirector-server start
+           /etc/init.d/usb-redirector-server enable
+           ```
+        
+        ## Architecture Guide
+        - **x86_64**: For PC Engines APU, generic x86 builds
+        - **ramips_mt7621**: For Xiaomi devices, Ubiquiti EdgeRouter X, etc.
+        - **ath79_generic**: For TP-Link Archer series, Netgear, etc.
+        - **mediatek_filogic**: For Xiaomi AX6000, Redmi AX6S, etc.
+        
+        If unsure about your architecture, check with: `cat /etc/openwrt_release`
+        EOF
+        
+        echo "Release packages prepared:"
+        ls -la release-packages/
+
+    - name: Upload release packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: usb-redirector-all-architectures
+        path: release-packages/*
+        retention-days: 90
+
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: |
-          usb-redirector-*/*.ipk
+        files: release-packages/*.ipk
+        body_path: release-packages/INSTALLATION.md
         draft: false
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  install-guide:
-    runs-on: ubuntu-22.04
-    steps:
-    - name: Generate installation instructions
-      run: |
-        cat > INSTALL.md << 'EOF'
-        # USB Redirector Server Installation Guide
-        
-        ## Installation Steps
-        
-        1. Transfer the built packages to your OpenWrt device:
-        ```bash
-        scp kmod-usb-redirector-server-*.ipk root@your-device-ip:/tmp/
-        scp usb-redirector-server-*.ipk root@your-device-ip:/tmp/
-        ```
-        
-        2. Install packages on your OpenWrt device (kernel module first):
-        ```bash
-        opkg install /tmp/kmod-usb-redirector-server-*.ipk
-        opkg install /tmp/usb-redirector-server-*.ipk
-        ```
-        
-        3. Start the service:
-        ```bash
-        service usb-redirector-server start
-        service usb-redirector-server enable
-        ```
-        
-        ## Manual Build Instructions
-        
-        If you need to build manually:
-        ```bash
-        make package/usb-redirector-server/clean
-        make package/usb-redirector-server/prepare  
-        make package/usb-redirector-server/compile V=99
-        make package/usb-redirector-server/install
-        ```
-        EOF
-        
-    - name: Upload installation guide
-      uses: actions/upload-artifact@v4
-      with:
-        name: installation-guide
-        path: INSTALL.md
