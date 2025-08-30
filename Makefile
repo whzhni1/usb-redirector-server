@@ -31,12 +31,9 @@ This package contains a Linux kernel module for the USB Redirector server.
 endef
 
 define Build/Prepare
-    mkdir -p $(PKG_BUILD_DIR)
-    $(CP) -r ./src $(PKG_BUILD_DIR)/
-    $(foreach p,$(wildcard ./patches/*.patch), \
-        $(call PatchDir,$(PKG_BUILD_DIR),$(p)))
+	mkdir -p $(PKG_BUILD_DIR)
+	$(CP) -r ./src $(PKG_BUILD_DIR)
 endef
-
 
 define Build/Compile
 	$(MAKE) -C "$(LINUX_DIR)" M="$(PKG_BUILD_DIR)/src/tusbd" \
