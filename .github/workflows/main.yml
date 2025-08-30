@@ -27,7 +27,7 @@ jobs:
     
     steps:
     - name: Checkout USB Redirector Server
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Free up disk space
       run: |
@@ -246,7 +246,7 @@ jobs:
         cat ../artifacts/package-info.txt
 
     - name: Upload packages
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: usb-redirector-${{ env.TARGET }}-${{ env.SUBTARGET }}
         path: |
@@ -256,7 +256,7 @@ jobs:
 
     - name: Upload build logs on failure
       if: failure()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: build-logs-${{ env.TARGET }}-${{ env.SUBTARGET }}
         path: |
@@ -268,7 +268,7 @@ jobs:
 
     - name: Create release (optional)
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: release-packages
         path: artifacts/*.ipk
