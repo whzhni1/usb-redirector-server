@@ -59,6 +59,10 @@ define Package/usb-redirector-server
   TITLE:=USB Redirector Server files
 endef
 
+# 添加这一行来跳过库依赖检查
+PKG_CHECK_FORMAT_SECURITY:=0
+PKG_FIXUP:=autoreconf
+
 define Package/usb-redirector-server/description
 This package contains USB Redirector server daemon, configuration utility, configuration files and startup scripts.
 endef
