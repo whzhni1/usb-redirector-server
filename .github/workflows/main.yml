@@ -27,7 +27,26 @@ jobs:
     
     steps:
     - name: Checkout USB Redirector Server
-      uses: actions/checkout@v4
+      uses: actions/checkout@v3
+
+    - name: Verify repository structure
+      run: |
+        echo "=== Repository structure ==="
+        ls -la
+        echo ""
+        echo "=== files/bin directory ==="
+        ls -la files/bin/ || echo "files/bin not found"
+        echo ""
+        echo "=== Checking aarch64-muslhf binaries ==="
+        ls -la files/bin/aarch64-muslhf/ || echo "aarch64-muslhf not found"
+        
+        # Check if files are executable
+        if [ -f "files/bin/aarch64-muslhf/usbsrv" ]; then
+          echo "usbsrv found, checking if executable:"
+          ls -la files/bin/aarch64-muslhf/usbsrv
+        else
+          echo "ERROR: usbsrv not found in files/bin/aarch64-muslhf/"
+        fi
 
     - name: Free up disk space
       run: |
@@ -86,45 +105,67 @@ jobs:
         # Create package directory in OpenWrt
         mkdir -p openwrt/package/usb-redirector-server
         
-        # Copy package files preserving structure
+        # Copy all files preserving structure
+        echo "=== Copying package files to OpenWrt ==="
         cp -r Makefile openwrt/package/usb-redirector-server/
         cp -r src openwrt/package/usb-redirector-server/
         cp -r files openwrt/package/usb-redirector-server/
         
-        # Fix Makefile tabs (convert spaces to tabs for recipe lines)
-        sed -i 's/^[ ]\+\([$(]\)/\t\1/g' openwrt/package/usb-redirector-server/Makefile
-        
-        # Display package structure
-        echo "Package structure:"
+        # Verify files were copied correctly
+        echo ""
+        echo "=== Verifying copied files ==="
+        echo "Package directory contents:"
         ls -la openwrt/package/usb-redirector-server/
         
-        # Check if kernel module source exists
-        if [ -d "openwrt/package/usb-redirector-server/src/tusbd" ]; then
-          echo "Kernel module source found:"
-          ls -la openwrt/package/usb-redirector-server/src/tusbd/
+        echo ""
+        echo "Files/bin directory:"
+        ls -la openwrt/package/usb-redirector-server/files/bin/ || echo "files/bin not found"
+        
+        echo ""
+        echo "aarch64-muslhf directory:"
+        ls -la openwrt/package/usb-redirector-server/files/bin/aarch64-muslhf/ || echo "aarch64-muslhf not found"
+        
+        # Fix permissions
+        if [ -d "openwrt/package/usb-redirector-server/files/bin" ]; then
+          echo ""
+          echo "=== Setting executable permissions ==="
+          find openwrt/package/usb-redirector-server/files/bin -type f -name "usbsrv*" -exec chmod +x {} \;
+          find openwrt/package/usb-redirector-server/files/bin -type f -name "*.init" -exec chmod +x {} \;
+        fi
+        
+        # Fix Makefile tabs (convert spaces to tabs for recipe lines)
+        sed -i 's/^[ ]\+\([$(]\)/\t\1/g' openwrt/package/usb-redirector-server/Makefile
+
+    - name: Debug package structure before build
+      run: |
+        echo "=== Final package structure check ==="
+        cd openwrt/package/usb-redirector-server
+        
+        echo "Current directory: $(pwd)"
+        echo ""
+        echo "Directory tree:"
+        find . -type d | head -20
+        echo ""
+        echo "Binary files:"
+        find files/bin -type f -name "usb*" 2>/dev/null || echo "No USB binary files found"
+        
+        echo ""
+        echo "Testing file access:"
+        if [ -f "files/bin/aarch64-muslhf/usbsrv" ]; then
+          echo "SUCCESS: files/bin/aarch64-muslhf/usbsrv exists"
+          file files/bin/aarch64-muslhf/usbsrv
+        else
+          echo "ERROR: files/bin/aarch64-muslhf/usbsrv NOT FOUND"
+          echo "Creating missing directory and copying from aarch64-gnueabi if available..."
+          if [ -d "files/bin/aarch64-gnueabi" ] && [ ! -d "files/bin/aarch64-muslhf" ]; then
+            cp -r files/bin/aarch64-gnueabi files/bin/aarch64-muslhf
+            echo "Created aarch64-muslhf from aarch64-gnueabi"
+          fi
         fi
 
     - name: Configure OpenWrt for target platform
       run: |
         cd openwrt
-        
-        # Determine architecture-specific settings
-        case "${{ env.TARGET }}_${{ env.SUBTARGET }}" in
-          "mediatek_filogic")
-            ARCH_SUFFIX="aarch64_cortex-a53"
-            ;;
-          "ramips_mt7621")
-            ARCH_SUFFIX="mipsel_24kc"
-            ;;
-          "x86_64")
-            ARCH_SUFFIX="x86_64"
-            ;;
-          *)
-            ARCH_SUFFIX="unknown"
-            ;;
-        esac
-        
-        echo "Building for architecture: $ARCH_SUFFIX"
         
         # Create configuration
         cat > .config << EOF
@@ -132,7 +173,6 @@ jobs:
         CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y
         CONFIG_TARGET_BOARD="${{ env.TARGET }}"
         CONFIG_TARGET_SUBTARGET="${{ env.SUBTARGET }}"
-        CONFIG_TARGET_ARCH_PACKAGES="$ARCH_SUFFIX"
         CONFIG_ALL_KMODS=y
         CONFIG_PACKAGE_kmod-usb-core=y
         CONFIG_PACKAGE_kmod-usb2=y
@@ -179,38 +219,35 @@ jobs:
         cd openwrt
         echo "Building Linux kernel..."
         make target/linux/compile -j$(nproc) V=w || make target/linux/compile -j1 V=s
-        
-        # Verify kernel build
-        echo "Checking kernel build directory:"
-        find build_dir -name "linux-*" -type d | head -5
 
-    - name: Build USB Redirector kernel module
+    - name: Build USB Redirector packages
       run: |
         cd openwrt
         
-        echo "=== Building USB Redirector kernel module ==="
+        echo "=== Building USB Redirector packages ==="
+        
+        # One more check before build
+        echo "Final check - package files:"
+        ls -la package/usb-redirector-server/files/bin/aarch64-muslhf/ 2>/dev/null || {
+          echo "WARNING: aarch64-muslhf still missing, trying to fix..."
+          cd package/usb-redirector-server
+          if [ -d "files/bin/aarch64-gnueabi" ]; then
+            mkdir -p files/bin/aarch64-muslhf
+            cp -v files/bin/aarch64-gnueabi/* files/bin/aarch64-muslhf/
+            chmod +x files/bin/aarch64-muslhf/*
+          fi
+          cd ../..
+        }
         
         # Clean previous builds
         make package/usb-redirector-server/clean V=s
         
-        # Prepare the package
-        make package/usb-redirector-server/prepare V=s
-        
-        # Compile kernel module
+        # Build the package
         make package/usb-redirector-server/compile V=s || {
           echo "Build failed, showing detailed error:"
           make package/usb-redirector-server/compile V=s
           exit 1
         }
-
-    - name: Build USB Redirector userspace package
-      run: |
-        cd openwrt
-        
-        echo "=== Building USB Redirector userspace components ==="
-        
-        # Build complete package including userspace
-        make package/usb-redirector-server/install V=s
         
         # Generate package index
         make package/index V=s
@@ -222,12 +259,9 @@ jobs:
         # Create artifacts directory
         mkdir -p ../artifacts
         
-        # Find and copy kernel module packages
-        echo "Searching for kernel module packages..."
+        # Find and copy packages
+        echo "Searching for built packages..."
         find bin/ -name "kmod-usb-redirector-server*.ipk" -exec cp -v {} ../artifacts/ \;
-        
-        # Find and copy userspace packages
-        echo "Searching for userspace packages..."
         find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" -exec cp -v {} ../artifacts/ \;
         
         # Create package info
@@ -246,7 +280,7 @@ jobs:
         cat ../artifacts/package-info.txt
 
     - name: Upload packages
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
         name: usb-redirector-${{ env.TARGET }}-${{ env.SUBTARGET }}
         path: |
@@ -256,33 +290,11 @@ jobs:
 
     - name: Upload build logs on failure
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
         name: build-logs-${{ env.TARGET }}-${{ env.SUBTARGET }}
         path: |
           openwrt/logs/
           openwrt/build_dir/target-*/linux-*/linux-*/.config
-          openwrt/build_dir/target-*/linux-*/gpio-button-hotplug/.built
-          openwrt/build_dir/target-*/usb-redirector-server*/
+          openwrt/package/usb-redirector-server/
         retention-days: 7
-
-    - name: Create release (optional)
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-packages
-        path: artifacts/*.ipk
-        retention-days: 90
-
-    - name: Summary
-      run: |
-        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- **OpenWrt Version:** ${{ env.OPENWRT_VERSION }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Target:** ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Date:** $(date)" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### Packages Built" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        ls -lah artifacts/*.ipk 2>/dev/null || echo "No packages found" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
