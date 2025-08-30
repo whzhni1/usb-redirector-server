@@ -63,18 +63,56 @@ jobs:
           key: dl-toolchain-${{ matrix.arch }}-${{ hashFiles('**/feeds.conf.default') }}
           restore-keys: dl-toolchain-${{ matrix.arch }}-
 
-      - name: Prepare package and Disable uboot-mediatek
+            # ... 其他步骤 ...
+
+      - name: Prepare package and Disable uboot-mediatek (Advanced with Makefile check)
         run: |
           cd "$SDK_PATH"
           ./scripts/feeds update -a
-          # 在安装 feeds 之前或之后，确保删除 uboot-mediatek
-          # 尝试在 update 后立即删除
-          rm -rf feeds/base/package/uboot-mediatek || true # 使用 || true 避免删除不存在的目录时报错
-          echo "Removed uboot-mediatek from feeds/base/package to skip its prereq check"
+
+          BASE_FEED_DIR=$(find feeds -name "base" -type d -print -quit)
+          if [ -n "$BASE_FEED_DIR" ]; then
+            echo "Found base feed directory: $BASE_FEED_DIR"
+            BASE_MAKEFILE="$BASE_FEED_DIR/Makefile"
+
+            if [ -f "$BASE_MAKEFILE" ]; then
+              echo "Content of $BASE_MAKEFILE before modification:"
+              cat "$BASE_MAKEFILE"
+              echo "----------------------------------------"
+
+              # 尝试在 base feed 的 Makefile 中注释掉或移除 uboot-mediatek 的定义
+              # 常见的模式是 'PKG_NAME:=uboot-mediatek' 或者 'include $(INCLUDE_DIR)/package.mk' 后面的定义
+              # 或者直接是包的目录引用 'package/uboot-mediatek'
+              
+              # 尝试1: 移除包含 'uboot-mediatek' 的整行
+              sed -i '/uboot-mediatek/d' "$BASE_MAKEFILE" || true
+              
+              # 尝试2: 如果是明确的 PACKAGE_* 定义，例如 PKG_NAME:=uboot-mediatek
+              # 我们可以尝试删除包含 'PKG_NAME:=uboot-mediatek' 的行
+              sed -i '/PKG_NAME:=uboot-mediatek/d' "$BASE_MAKEFILE" || true
+
+              # 尝试3: 如果是直接 include 了 uboot-mediatek 的子 Makefile
+              # sed -i '/include \$(TOPDIR)\/feeds\/base\/uboot-mediatek\/Makefile/d' "$BASE_MAKEFILE" || true
+              # 注意：这里需要根据实际情况调整 include 路径
+
+              echo "Content of $BASE_MAKEFILE after modification:"
+              cat "$BASE_MAKEFILE"
+              echo "----------------------------------------"
+            else
+              echo "Warning: $BASE_MAKEFILE not found."
+            fi
+          else
+            echo "Warning: Base feed directory not found."
+          fi
+
+          # 确保在安装 feeds 之前或之后，删除 uboot-mediatek 的目录
+          # 这些删除操作是补充，以防 Makefile 修改不够彻底
+          rm -rf feeds/base/package/uboot-mediatek || true
+          echo "Removed uboot-mediatek from feeds/base/package after feeds update"
 
           ./scripts/feeds install -a
 
-          # 再次尝试删除，以防 install -a 重新拉取
+          # 再次检查并删除，以防 install -a 重新拉取
           rm -rf feeds/base/package/uboot-mediatek || true
           echo "Re-checked and removed uboot-mediatek after feeds install"
 
@@ -87,6 +125,8 @@ jobs:
           echo "# CONFIG_PACKAGE_uboot-mediatek is not set" >> .config || true
           # 重新生成 defconfig，确保更改生效
           make defconfig
+
+      # ... 后续步骤不变 ...
 
       - name: Force-install setuptools into SDK host python
         run: |
