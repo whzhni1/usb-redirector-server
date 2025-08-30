@@ -78,7 +78,7 @@ jobs:
           exit 1
         fi
 
-    - name: Verify and copy USB Redirector package
+    - name: Verify USB Redirector package structure
       run: |
         echo "Verifying USB Redirector package structure..."
         echo "Current directory contents:"
@@ -114,4 +114,301 @@ jobs:
           echo "Creating USB Redirector package in OpenWrt build system..."
           mkdir -p openwrt/package/usb-redirector-server
           
-          # Copy all package files except .git, openwrt, and other 
+          # Copy all package files except .git, openwrt, and other build artifacts
+          echo "Copying package files..."
+          cp -r Makefile src files openwrt/package/usb-redirector-server/ 2>/dev/null || true
+          if [ -d "./patches" ]; then
+            cp -r patches openwrt/package/usb-redirector-server/ 2>/dev/null || true
+          fi
+          
+          echo "USB Redirector package copied successfully"
+          ls -la openwrt/package/usb-redirector-server/
+          
+        elif [ -d "./usb-redirector-server" ]; then
+          # Package is in a subdirectory
+          echo "Found usb-redirector-server subdirectory"
+          cp -r ./usb-redirector-server openwrt/package/
+          echo "USB Redirector package copied from subdirectory"
+        else
+          echo "Error: Cannot find USB Redirector package structure"
+          echo "Expected either:"
+          echo "  1. Makefile and src/ in root directory, or"
+          echo "  2. usb-redirector-server/ subdirectory"
+          exit 1
+        fi
+
+    - name: Update feeds with retry mechanism
+      run: |
+        cd openwrt
+        
+        # Function to retry feed operations
+        retry_feed_operation() {
+          local operation=$1
+          local max_attempts=3
+          local attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt for feed $operation..."
+            if ./scripts/feeds $operation; then
+              echo "Feed $operation successful"
+              return 0
+            else
+              echo "Feed $operation attempt $attempt failed"
+              if [ $attempt -lt $max_attempts ]; then
+                echo "Waiting 30 seconds before retry..."
+                sleep 30
+                # Clean up partial downloads
+                rm -rf feeds/packages feeds/luci feeds/routing feeds/telephony
+              fi
+              attempt=$((attempt + 1))
+            fi
+          done
+          
+          echo "Feed $operation failed after $max_attempts attempts"
+          return 1
+        }
+        
+        # Update feeds with retry
+        retry_feed_operation "update -a"
+
+    - name: Install essential feeds only
+      run: |
+        cd openwrt
+        
+        # Install only essential packages, skip problematic ones
+        echo "Installing essential packages only..."
+        ./scripts/feeds install -f -p packages base-files
+        ./scripts/feeds install -f -p packages kernel
+        ./scripts/feeds install -f -p packages system
+        ./scripts/feeds install -f -p packages utils
+        ./scripts/feeds install -f -p packages libs
+        ./scripts/feeds install -f -p packages network
+        
+        # Install luci basics
+        ./scripts/feeds install -f -p luci luci-base
+        
+        echo "Skipping telephony feed to avoid errors"
+
+    - name: Configure for package building
+      run: |
+        cd openwrt
+        
+        # Create minimal configuration for package building
+        echo -e "${{ matrix.target.config }}" > .config
+        
+        # Enable USB Redirector packages
+        cat >> .config << EOF
+        # USB Redirector Server packages
+        CONFIG_PACKAGE_usb-redirector-server=m
+        CONFIG_PACKAGE_kmod-usb-redirector-server=m
+        
+        # USB Support modules
+        CONFIG_USB_SUPPORT=y
+        CONFIG_PACKAGE_kmod-usb-core=y
+        CONFIG_PACKAGE_kmod-usb-ohci=y
+        CONFIG_PACKAGE_kmod-usb-uhci=y
+        CONFIG_PACKAGE_kmod-usb2=y
+        CONFIG_PACKAGE_kmod-usb3=y
+        
+        # Build options
+        CONFIG_DEVEL=y
+        CONFIG_CCACHE=y
+        CONFIG_BUILD_LOG=y
+        
+        # Disable problematic packages
+        # CONFIG_PACKAGE_freeswitch is not set
+        # CONFIG_PACKAGE_kamailio is not set
+        EOF
+        
+        make defconfig
+        
+        echo "Configuration completed"
+
+    - name: Download package dependencies
+      run: |
+        cd openwrt
+        echo "Downloading dependencies..."
+        make download -j8 V=s || make download -j1 V=s
+
+    - name: Build tools and toolchain
+      run: |
+        cd openwrt
+        echo "Building tools..."
+        make tools/install -j$(nproc) V=s
+        
+        echo "Building toolchain..."
+        make toolchain/install -j$(nproc) V=s
+
+    - name: Build USB Redirector packages
+      run: |
+        cd openwrt
+        
+        echo "Starting USB Redirector package build..."
+        
+        # Clean any previous builds
+        make package/usb-redirector-server/clean V=s
+        
+        # Build the packages step by step
+        echo "Preparing package..."
+        make package/usb-redirector-server/prepare V=s
+        
+        echo "Compiling package..."
+        make package/usb-redirector-server/compile V=s
+        
+        echo "Installing package..."
+        make package/usb-redirector-server/install V=s
+        
+        echo "USB Redirector package build completed"
+
+    - name: Collect IPK packages
+      run: |
+        cd openwrt
+        mkdir -p ../artifacts/${{ matrix.target.arch }}
+        
+        echo "Searching for USB Redirector packages..."
+        echo "Checking bin directory structure:"
+        find bin/ -name "*.ipk" | head -10
+        
+        # Find and copy USB Redirector packages
+        found_packages=0
+        
+        find bin/ -name "*usb-redirector-server*.ipk" -type f | while read file; do
+          echo "Found server package: $file"
+          cp "$file" ../artifacts/${{ matrix.target.arch }}/
+          found_packages=$((found_packages + 1))
+        done
+        
+        find bin/ -name "*kmod-usb-redirector-server*.ipk" -type f | while read file; do
+          echo "Found kernel module: $file"  
+          cp "$file" ../artifacts/${{ matrix.target.arch }}/
+          found_packages=$((found_packages + 1))
+        done
+        
+        # Also check for any redirector related packages
+        find bin/ -name "*redirector*.ipk" -type f | while read file; do
+          echo "Found redirector package: $file"  
+          cp "$file" ../artifacts/${{ matrix.target.arch }}/
+          found_packages=$((found_packages + 1))
+        done
+        
+        # List all found packages
+        echo "Collected packages for ${{ matrix.target.arch }}:"
+        ls -la ../artifacts/${{ matrix.target.arch }}/ || echo "No packages found"
+        
+        # Create package info
+        cat > ../artifacts/${{ matrix.target.arch }}/README.txt << EOF
+        USB Redirector Server IPK Packages for ${{ matrix.target.arch }}
+        Built on: $(date)
+        OpenWrt Version: ${{ env.OPENWRT_VERSION }}
+        
+        Installation Instructions:
+        1. Transfer both files to your OpenWrt device
+        2. Install kernel module first: opkg install kmod-usb-redirector-server-*.ipk
+        3. Install server package: opkg install usb-redirector-server-*.ipk
+        4. Start service: /etc/init.d/usb-redirector-server start
+        5. Enable service: /etc/init.d/usb-redirector-server enable
+        EOF
+
+    - name: Upload IPK artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: usb-redirector-ipk-${{ matrix.target.arch }}
+        path: artifacts/${{ matrix.target.arch }}/*
+        retention-days: 30
+
+    - name: Debug build output
+      if: always()
+      run: |
+        echo "=== Build Debug Information ==="
+        echo "Checking for any IPK files in bin directory:"
+        find openwrt/bin/ -name "*.ipk" | head -20 || echo "No IPK files found"
+        
+        echo "Checking build logs:"
+        find openwrt/logs/ -name "*.txt" | head -10 | xargs -I {} sh -c 'echo "=== {} ==="; tail -20 "{}"' || echo "No logs found"
+
+  package-release:
+    needs: build-ipk
+    runs-on: ubuntu-22.04
+    if: success() && (github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: all-packages
+
+    - name: Organize packages
+      run: |
+        mkdir -p release-packages
+        
+        echo "Downloaded artifacts:"
+        find all-packages/ -type f
+        
+        # Copy all IPK files to release directory
+        find all-packages/ -name "*.ipk" -exec cp {} release-packages/ \;
+        
+        # Create release notes
+        cat > release-packages/INSTALLATION.md << 'EOF'
+        # USB Redirector Server IPK Packages
+        
+        This release contains pre-built IPK packages for multiple OpenWrt architectures.
+        
+        ## Available Architectures
+        - x86_64 (PC/VM builds)
+        - ramips_mt7621 (MT7621 routers)
+        - ath79_generic (AR71xx/AR724x/AR913x/AR933x routers)
+        - mediatek_filogic (MT7986/MT7981 routers like Xiaomi AX6000)
+        
+        ## Installation Instructions
+        
+        1. **Identify your device architecture** and download the corresponding files:
+           - `kmod-usb-redirector-server-<version>-<arch>.ipk` (kernel module)
+           - `usb-redirector-server-<version>-<arch>.ipk` (server application)
+        
+        2. **Transfer files to your OpenWrt device:**
+           ```bash
+           scp *.ipk root@your-router-ip:/tmp/
+           ```
+        
+        3. **Install packages (kernel module MUST be installed first):**
+           ```bash
+           ssh root@your-router-ip
+           opkg install /tmp/kmod-usb-redirector-server-*.ipk
+           opkg install /tmp/usb-redirector-server-*.ipk
+           ```
+        
+        4. **Start and enable the service:**
+           ```bash
+           /etc/init.d/usb-redirector-server start
+           /etc/init.d/usb-redirector-server enable
+           ```
+        
+        ## Architecture Guide
+        - **x86_64**: For PC Engines APU, generic x86 builds
+        - **ramips_mt7621**: For Xiaomi devices, Ubiquiti EdgeRouter X, etc.
+        - **ath79_generic**: For TP-Link Archer series, Netgear, etc.
+        - **mediatek_filogic**: For Xiaomi AX6000, Redmi AX6S, etc.
+        
+        If unsure about your architecture, check with: `cat /etc/openwrt_release`
+        EOF
+        
+        echo "Release packages prepared:"
+        ls -la release-packages/
+
+    - name: Upload release packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: usb-redirector-all-architectures
+        path: release-packages/*
+        retention-days: 90
+
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release-packages/*.ipk
+        body_path: release-packages/INSTALLATION.md
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
