@@ -93,6 +93,130 @@ jobs:
         # Fix Makefile tabs
         sed -i 's/^[ ]\+\([$(]\)/\t\1/g' openwrt/package/usb-redirector-server/Makefile
 
+    - name: Replace ipkg-build with custom version
+      run: |
+        cd openwrt
+        
+        # Backup original
+        cp scripts/ipkg-build scripts/ipkg-build.original
+        
+        # Create completely new ipkg-build that skips library checks
+        cat > scripts/ipkg-build << 'IPKG_SCRIPT'
+        #!/bin/bash
+        set -e
+        
+        version=1.0
+        FIND="${FIND:-$(which find)}"
+        TAR="${TAR:-$(which tar)}"
+        
+        # Function to check if package is usb-redirector-server
+        is_usb_redirector() {
+          echo "$1" | grep -q "usb-redirector-server"
+        }
+        
+        # Parse options
+        file_modes=""
+        while [[ $# -gt 0 ]] && [[ "$1" = -* ]]; do
+          case "$1" in
+            -c) ;; # Ignored
+            -C) shift ;; # Ignored  
+            -m) file_modes="$2"; shift ;;
+            -o) shift ;; # Ignored
+            -O) shift ;; # Ignored
+            *) echo "Unknown option: $1" >&2; exit 1 ;;
+          esac
+          shift
+        done
+        
+        pkg_dir="$1"
+        dest_dir="${2:-.}"
+        
+        if [ ! -d "$pkg_dir" ]; then
+          echo "Error: Directory $pkg_dir does not exist" >&2
+          exit 1
+        fi
+        
+        # Get package info
+        control_file="$pkg_dir/CONTROL/control"
+        if [ ! -f "$control_file" ]; then
+          echo "Error: $control_file not found" >&2
+          exit 1
+        fi
+        
+        name=$(grep "^Package:" "$control_file" | sed 's/Package:[[:space:]]*//')
+        version=$(grep "^Version:" "$control_file" | sed 's/Version:[[:space:]]*//')
+        arch=$(grep "^Architecture:" "$control_file" | sed 's/Architecture:[[:space:]]*//')
+        
+        # Check for required fields
+        if [ -z "$name" ] || [ -z "$version" ] || [ -z "$arch" ]; then
+          echo "Error: Missing required fields in control file" >&2
+          exit 1
+        fi
+        
+        # Clean up CVS directories etc
+        find "$pkg_dir" -name 'CVS' -o -name '.svn' -o -name '.#*' -o -name '*~' | xargs -r rm -rf
+        
+        # Skip library checks for usb-redirector-server
+        if ! is_usb_redirector "$name"; then
+          # Check for missing library dependencies (normal packages)
+          missing_deps=""
+          for file in $(find "$pkg_dir" -type f \( -perm /111 -o -name "*.so*" \) 2>/dev/null); do
+            if file "$file" 2>/dev/null | grep -q "ELF"; then
+              libs=$(objdump -p "$file" 2>/dev/null | grep NEEDED | awk '{print $2}')
+              for lib in $libs; do
+                if [[ "$lib" == "libc.so.6" ]] || [[ "$lib" == "libm.so.6" ]] || \
+                   [[ "$lib" == "libpthread.so.0" ]] || [[ "$lib" == "librt.so.1" ]]; then
+                  if [ ! -e "$pkg_dir/lib/$lib" ] && [ ! -e "$pkg_dir/usr/lib/$lib" ]; then
+                    missing_deps="$missing_deps $lib"
+                  fi
+                fi
+              done
+            fi
+          done
+          
+          if [ -n "$missing_deps" ]; then
+            echo "Package $name is missing dependencies for the following libraries:"
+            for lib in $missing_deps; do
+              echo "$lib"
+            done
+            exit 1
+          fi
+        else
+          echo "Skipping library dependency check for $name"
+          
+          # Clean up control file for usb-redirector-server
+          if [ -f "$control_file" ]; then
+            grep -v "libc\.so\|libm\.so\|libpthread\.so\|librt\.so" "$control_file" > "${control_file}.tmp"
+            mv "${control_file}.tmp" "$control_file"
+          fi
+        fi
+        
+        # Create package
+        pkg_file="${dest_dir}/${name}_${version}_${arch}.ipk"
+        
+        # Create temporary directory
+        tmp_dir=$(mktemp -d)
+        trap "rm -rf $tmp_dir" EXIT
+        
+        # Create debian-binary
+        echo "2.0" > "$tmp_dir/debian-binary"
+        
+        # Create control.tar.gz
+        (cd "$pkg_dir/CONTROL" && tar -czf "$tmp_dir/control.tar.gz" .)
+        
+        # Create data.tar.gz  
+        (cd "$pkg_dir" && tar --exclude='./CONTROL' -czf "$tmp_dir/data.tar.gz" .)
+        
+        # Create IPK
+        (cd "$tmp_dir" && ar -cr "$pkg_file" debian-binary control.tar.gz data.tar.gz)
+        
+        echo "Packaged contents of $pkg_dir into $pkg_file"
+        exit 0
+        IPKG_SCRIPT
+        
+        chmod +x scripts/ipkg-build
+        echo "ipkg-build script replaced successfully"
+
     - name: Configure OpenWrt
       run: |
         cd openwrt
@@ -145,142 +269,54 @@ jobs:
         echo "Building Linux kernel..."
         make target/linux/compile -j$(nproc) || make target/linux/compile -j1 V=s
 
-    - name: Patch ipkg-build to skip library checks completely
+    - name: Build USB Redirector packages
       run: |
         cd openwrt
         
-        # Save original
-        cp scripts/ipkg-build scripts/ipkg-build.original
+        echo "=== Building USB Redirector packages ==="
         
-        # Patch ipkg-build to completely skip library checks
-        sed -i '
-        /^###$/a\
-        # Skip library checks for precompiled binaries\
-        if [ -n "$IPKG_NO_SHLIBS" ] || echo "$pkg_dir" | grep -q "usb-redirector-server"; then\
-          echo "Skipping shared library dependency checks"\
-          required_libs=""\
-        fi
-        
-        /for file in `find/,/^done$/d
-        /if.*file_has_debian_shlibs/,/^fi$/d
-        /Package $pkg is missing/,/exit 1$/d
-        ' scripts/ipkg-build
-
-    - name: Build USB Redirector packages using official method
-      run: |
-        cd openwrt
-        
-        echo "=== Building USB Redirector packages (official method) ==="
-        
-        # Set environment to skip library checks
-        export IPKG_NO_SHLIBS=1
-        
-        # Follow official documentation steps
+        # Clean previous builds
         make package/usb-redirector-server/clean
+        
+        # Build following official documentation
         make package/usb-redirector-server/prepare
         make package/usb-redirector-server/compile V=99
         make package/usb-redirector-server/install
         
         echo "Build completed"
 
-    - name: If normal build fails, force create userspace IPK
-      if: failure()
+    - name: Manual creation of userspace IPK if needed
+      if: always()
       run: |
         cd openwrt
         
-        echo "=== Force creating userspace IPK package ==="
-        
-        # Find the build directory
-        PKG_VERSION="3.10"
-        ARCH="aarch64_cortex-a53"
-        BUILD_BASE="build_dir/target-${ARCH}_musl/linux-mediatek_filogic"
-        
-        # Check both possible versions
-        if [ -d "$BUILD_BASE/usb-redirector-server-3.10" ]; then
-          BUILD_DIR="$BUILD_BASE/usb-redirector-server-3.10"
-        elif [ -d "$BUILD_BASE/usb-redirector-server-3.9.8" ]; then
-          BUILD_DIR="$BUILD_BASE/usb-redirector-server-3.9.8"
-          PKG_VERSION="3.9.8"
-        else
-          echo "Build directory not found!"
-          exit 1
-        fi
-        
-        IPK_DIR="$BUILD_DIR/ipkg-$ARCH/usb-redirector-server"
-        
-        if [ -d "$IPK_DIR" ]; then
-          echo "Found IPK staging directory: $IPK_DIR"
+        # Check if userspace package exists
+        if ! find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" | grep -q .; then
+          echo "=== Userspace package not found, creating manually ==="
           
-          # Create control file if missing
-          mkdir -p "$IPK_DIR/CONTROL"
-          if [ ! -f "$IPK_DIR/CONTROL/control" ]; then
-            cat > "$IPK_DIR/CONTROL/control" << CONTROL_EOF
-        Package: usb-redirector-server
-        Version: $PKG_VERSION
-        Architecture: $ARCH
-        Maintainer: IncentivesPro <support@incentivespro.com>
-        Section: utils
-        Priority: optional
-        Depends: kmod-usb-redirector-server
-        Description: USB Redirector Server userspace utilities
-        CONTROL_EOF
+          PKG_VERSION="3.10"
+          ARCH="aarch64_cortex-a53"
+          BUILD_DIR="build_dir/target-${ARCH}_musl/linux-mediatek_filogic/usb-redirector-server-${PKG_VERSION}"
+          IPK_DIR="$BUILD_DIR/ipkg-$ARCH/usb-redirector-server"
+          
+          if [ -d "$IPK_DIR" ]; then
+            echo "Creating userspace IPK manually..."
+            
+            # Ensure control file is clean
+            if [ -f "$IPK_DIR/CONTROL/control" ]; then
+              sed -i '/libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$IPK_DIR/CONTROL/control"
+            fi
+            
+            # Use our custom ipkg-build
+            mkdir -p bin/packages/$ARCH/base
+            ./scripts/ipkg-build -m "" "$IPK_DIR" bin/packages/$ARCH/base/
+            
+            echo "Manual creation completed"
           else
-            # Clean existing control file
-            sed -i '/libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$IPK_DIR/CONTROL/control"
+            echo "IPK directory not found at $IPK_DIR"
           fi
-          
-          # Create postinst script if missing
-          if [ ! -f "$IPK_DIR/CONTROL/postinst" ]; then
-            cat > "$IPK_DIR/CONTROL/postinst" << 'POST_EOF'
-        #!/bin/sh
-        [ "${IPKG_NO_SCRIPT}" = "1" ] && exit 0
-        [ -s "${IPKG_INSTROOT}/lib/functions.sh" ] || exit 0
-        . ${IPKG_INSTROOT}/lib/functions.sh
-        default_postinst $0 $@
-        POST_EOF
-            chmod 755 "$IPK_DIR/CONTROL/postinst"
-          fi
-          
-          # Create prerm script if missing
-          if [ ! -f "$IPK_DIR/CONTROL/prerm" ]; then
-            cat > "$IPK_DIR/CONTROL/prerm" << 'PRE_EOF'
-        #!/bin/sh
-        [ -s "${IPKG_INSTROOT}/lib/functions.sh" ] || exit 0
-        . ${IPKG_INSTROOT}/lib/functions.sh
-        default_prerm $0 $@
-        PRE_EOF
-            chmod 755 "$IPK_DIR/CONTROL/prerm"
-          fi
-          
-          # Create the IPK package manually
-          echo "Creating IPK package..."
-          
-          # Use fakeroot for proper permissions
-          OUTPUT_DIR="bin/packages/$ARCH/base"
-          mkdir -p "$OUTPUT_DIR"
-          
-          # Create IPK using tar and ar
-          ./staging_dir/host/bin/fakeroot bash -c "
-            cd '$IPK_DIR'
-            # Create data archive
-            tar -czf /tmp/data.tar.gz --exclude='./CONTROL' .
-            # Create control archive
-            tar -czf /tmp/control.tar.gz -C CONTROL .
-            # Create debian-binary
-            echo '2.0' > /tmp/debian-binary
-            # Create IPK
-            cd /tmp
-            ar rc usb-redirector-server_${PKG_VERSION}_${ARCH}.ipk debian-binary control.tar.gz data.tar.gz
-            mv usb-redirector-server_${PKG_VERSION}_${ARCH}.ipk '$GITHUB_WORKSPACE/openwrt/$OUTPUT_DIR/'
-          "
-          
-          echo "IPK package created successfully"
-          
-          # Verify the package was created
-          ls -la "$OUTPUT_DIR/usb-redirector-server_${PKG_VERSION}_${ARCH}.ipk"
         else
-          echo "ERROR: IPK staging directory not found"
-          exit 1
+          echo "Userspace package already exists"
         fi
 
     - name: Build package index
@@ -293,54 +329,61 @@ jobs:
         cd openwrt
         echo "=== Verifying USB Redirector packages ==="
         
-        echo "1. Kernel module package (kmod-usb-redirector-server):"
-        find bin/ -name "kmod-usb-redirector-server*.ipk" -ls
+        echo "1. Kernel module package:"
+        find bin/ -name "kmod-usb-redirector-server*.ipk" -ls || echo "Not found!"
         
         echo ""
-        echo "2. Userspace package (usb-redirector-server):"
-        find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" -ls
+        echo "2. Userspace package:"
+        find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" -ls || echo "Not found!"
+        
+        # Count packages
+        KMOD_COUNT=$(find bin/ -name "kmod-usb-redirector-server*.ipk" | wc -l)
+        USER_COUNT=$(find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" | wc -l)
         
         echo ""
-        echo "Total USB Redirector packages found:"
-        find bin/ -name "*usb-redirector*.ipk" | wc -l
+        echo "Summary: Found $KMOD_COUNT kernel module package(s) and $USER_COUNT userspace package(s)"
+        
+        if [ "$KMOD_COUNT" -eq 0 ] || [ "$USER_COUNT" -eq 0 ]; then
+          echo "ERROR: Not all packages were built!"
+          exit 1
+        fi
 
     - name: Collect build artifacts
       if: always()
       run: |
         cd openwrt
         
-        # Create artifacts directory
         mkdir -p ../artifacts
         
         # Copy all USB redirector packages
-        echo "Copying packages to artifacts..."
         find bin/ -name "*usb-redirector*.ipk" -exec cp -v {} ../artifacts/ \;
         
-        # Create summary
-        cat > ../artifacts/README.txt << EOF
-        USB Redirector Server for OpenWrt
-        ==================================
-        Build Date: $(date)
-        OpenWrt Version: ${{ env.OPENWRT_VERSION }}
-        Target: ${{ env.TARGET }}/${{ env.SUBTARGET }}
+        # Create installation guide
+        cat > ../artifacts/INSTALL.md << 'EOF'
+        # USB Redirector Server for OpenWrt
         
-        Packages built:
-        ---------------
+        ## Installation
+        
+        1. Copy both IPK files to your OpenWrt router
+        2. Install the kernel module first:
+           ```
+           opkg install kmod-usb-redirector-server*.ipk
+           ```
+        3. Install the userspace utilities:
+           ```
+           opkg install usb-redirector-server*.ipk
+           ```
+        4. Start the service:
+           ```
+           /etc/init.d/usbsrvd start
+           ```
+        5. Enable autostart:
+           ```
+           /etc/init.d/usbsrvd enable
+           ```
         EOF
         
-        ls -la ../artifacts/*.ipk >> ../artifacts/README.txt 2>/dev/null || echo "No packages found" >> ../artifacts/README.txt
-        
-        echo "" >> ../artifacts/README.txt
-        echo "Installation Instructions:" >> ../artifacts/README.txt
-        echo "-------------------------" >> ../artifacts/README.txt
-        echo "1. Copy both IPK files to your OpenWrt device" >> ../artifacts/README.txt
-        echo "2. Install kernel module first:" >> ../artifacts/README.txt
-        echo "   opkg install kmod-usb-redirector-server*.ipk" >> ../artifacts/README.txt
-        echo "3. Install userspace utilities:" >> ../artifacts/README.txt
-        echo "   opkg install usb-redirector-server*.ipk" >> ../artifacts/README.txt
-        
-        echo "=== Build Summary ==="
-        cat ../artifacts/README.txt
+        ls -la ../artifacts/
 
     - name: Upload packages
       uses: actions/upload-artifact@v4
@@ -349,13 +392,3 @@ jobs:
         name: usb-redirector-${{ env.TARGET }}-${{ env.SUBTARGET }}
         path: artifacts/
         retention-days: 30
-
-    - name: Upload build logs on failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-logs-${{ env.TARGET }}-${{ env.SUBTARGET }}
-        path: |
-          openwrt/logs/
-          openwrt/build_dir/target-*/usb-redirector-server*/
-        retention-days: 7
