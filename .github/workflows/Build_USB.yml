@@ -460,19 +460,4 @@ jobs:
           - Full USB support (USB 2.0/3.0)
           - LuCI web interface
           - WiFi 6 support
-```
 
-## 主要改进：
-
-1. **确保生成IPK包**：配置中使用 `=m` 而不是 `=y`，这样会生成独立的IPK包
-2. **单独检查和构建**：如果主构建没有生成IPK，会单独构建它们
-3. **多个artifact输出**：
-   - 完整固件
-   - 单独的IPK包
-   - 完整构建包
-4. **详细的安装说明**：包含固件刷写和IPK安装两种方式
-5. **自动创建release**：方便下载和分发
-
-这样您就能同时获得：
-- 完整的路由器固件（包含USB Redirector）
-- 两个独立的IPK包文件，可以在其他OpenWrt设备上安装
