@@ -1,8 +1,4 @@
-好的，我来修改workflow，确保在编译固件的同时也生成两个独立的IPK包文件。
 
-## 完整固件编译 + IPK包生成的GitHub Actions workflow
-
-```yaml
 name: Build OpenWrt Firmware with USB Redirector for CMCC RAX3000M
 
 on:
