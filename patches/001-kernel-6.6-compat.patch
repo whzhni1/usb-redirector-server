@@ -1,0 +1,62 @@
+--- a/src/tusbd/cdev.c
++++ b/src/tusbd/cdev.c
+@@ -9,6 +9,7 @@
+ 
+ #include <linux/device.h>
+ #include <linux/mutex.h>
++#include <linux/version.h>
+ #include <linux/cdev.h>
+ #include "usbd.h"
+ #include "cdev.h"
+@@ -17,6 +18,10 @@
+ 
+ #include "public_devices.h"
+ 
++/* Forward declarations to fix missing prototype warnings */
++static int lIllIllIl(struct IIIlll*lllll,int llIllI);
++static void lIlllllll(struct IIIlll*lllll,int llIllI);
++
+ static struct class*lIIIlII;static DEFINE_MUTEX(lIIIlIl);static int lIIIllI;struct 
+ lIlIllI{int lIIlIlI;dev_t IIIIll;struct cdev llIlII;struct IIIlll lllll;};static 
+ struct lIlIllI lllIlI[(0x0000000F+0x00000FF1+0x00000001-0x00001000)];static int 
+@@ -40,7 +45,11 @@
+ );
+ do{
+ mutex_init(&lIIIlIl);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++lIIIlII=class_create(IIIllII);
++#else
+ lIIIlII=class_create(THIS_MODULE,IIIllII);
++#endif
+ if(lIIIlII==
+ 
+ NULL||IS_ERR(lIIIlII)){lIlIlI(
+@@ -49,7 +58,11 @@
+ ,lIIIlII);return PTR_ERR(lIIIlII);
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
++lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;
++#else
+ lIIIlII->dev_uevent=lIIllIII,
++#endif
+ 
+ 0;if(IIIlllIl()){if(lIIIlII){
+ class_destroy(lIIIlII),lIIIlII=
+@@ -119,7 +132,7 @@
+ 
+ 0;return(0x00000000+0x00000000+0x00000000-0x00000000);
+ }
+-int lIllIllIl(struct IIIlll*lllll,int llIllI){
++static int lIllIllIl(struct IIIlll*lllll,int llIllI){
+ struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];if(!lIlllI->lIIlIlI){int IIIllI;
+ IIIllI=alloc_chrdev_region(&lIlllI->IIIIll,
+ (0x00000000+0x00000000+0x00000000-0x00000000),
+@@ -156,7 +169,7 @@
+ (0x00000000+0x00000000+0x00000000-0x00000000);
+ }
+ 
+-void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
++static void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
+ struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];lIlllI->lIIlIlI=(0x00000000+0x00000000+0x00000000-0x00000000);device_unregister(lllll->dev);
+ lllll->dev=
