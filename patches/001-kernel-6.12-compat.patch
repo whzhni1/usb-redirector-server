@@ -1,0 +1,34 @@
+--- a/src/tusbd/cdev.c
++++ b/src/tusbd/cdev.c
+@@ -10,6 +10,7 @@
+ #include <linux/device.h>
+ #include <linux/mutex.h>
+ #include <linux/cdev.h>
++#include <linux/version.h>
+ #include "usbd.h"
+ #include "cdev.h"
+ 
+@@ -40,7 +41,11 @@
+ );
+ do{
+ mutex_init(&lIIIlIl);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++lIIIlII=class_create(IIIllII);
++#else
+ lIIIlII=class_create(THIS_MODULE,IIIllII);
++#endif
+ if(lIIIlII==
+ 
+ NULL||IS_ERR(lIIIlII)){lIlIlI(
+@@ -49,7 +54,11 @@
+ ,lIIIlII);return PTR_ERR(lIIIlII);
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
++lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII,
++#else
+ lIIIlII->dev_uevent=lIIllIII,
++#endif
+ 
+ 0;if(IIIlllIl()){if(lIIIlII){
+ class_destroy(lIIIlII),lIIIlII=
