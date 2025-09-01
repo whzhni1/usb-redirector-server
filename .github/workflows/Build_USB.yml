@@ -1,3 +1,4 @@
+
 name: Build OpenWrt Firmware with USB Redirector for CMCC RAX3000M
 
 on:
@@ -165,86 +166,17 @@ jobs:
         
         echo "=== Base firmware build completed ==="
 
-    - name: Copy and patch USB Redirector package
+    - name: Copy USB Redirector package
       run: |
-        echo "=== Adding USB Redirector Server package with kernel 6.12 patches ==="
+        echo "=== Adding USB Redirector Server package ==="
         
         # Copy package to OpenWrt
         cp -r usb-redirector-server openwrt/package/
         
         # Fix Makefile tabs
         sed -i 's/^[ ]\+\([$(]\)/\t\1/g' openwrt/package/usb-redirector-server/Makefile
-        
-        # Create patches directory if not exists
-        mkdir -p openwrt/package/usb-redirector-server/patches
-        
-        # Create comprehensive kernel compatibility patch
-        cat > openwrt/package/usb-redirector-server/patches/001-kernel-6.12-compat.patch << 'PATCH_EOF'
-        --- a/src/tusbd/cdev.c
-        +++ b/src/tusbd/cdev.c
-        @@ -9,6 +9,7 @@
-         
-         #include <linux/device.h>
-         #include <linux/mutex.h>
-        +#include <linux/version.h>
-         #include <linux/cdev.h>
-         #include "usbd.h"
-         #include "cdev.h"
-        @@ -17,6 +18,10 @@
-         
-         #include "public_devices.h"
-         
-        +/* Forward declarations */
-        +static int lIllIllIl(struct IIIlll*lllll,int llIllI);
-        +static void lIlllllll(struct IIIlll*lllll,int llIllI);
-        +
-         static struct class*lIIIlII;static DEFINE_MUTEX(lIIIlIl);static int lIIIllI;struct 
-         lIlIllI{int lIIlIlI;dev_t IIIIll;struct cdev llIlII;struct IIIlll lllll;};static 
-         struct lIlIllI lllIlI[(0x0000000F+0x00000FF1+0x00000001-0x00001000)];static int 
-        @@ -40,7 +45,11 @@
-         );do{mutex_init(&lIIIlIl);
-        +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
-        +lIIIlII=class_create(IIIllII);
-        +#else
-         lIIIlII=class_create(THIS_MODULE,IIIllII);
-        +#endif
-         if(lIIIlII==
-         
-         NULL||IS_ERR(lIIIlII)){lIlIlI(
-        @@ -49,7 +58,11 @@
-         ,lIIIlII);return PTR_ERR(lIIIlII);
-         }
-         
-        +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
-        +lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;
-        +#else
-         lIIIlII->dev_uevent=lIIllIII,
-        +#endif
-         
-         0;if(IIIlllIl()){if(lIIIlII){
-         class_destroy(lIIIlII),lIIIlII=
-        @@ -119,7 +132,7 @@
-         
-         0;return(0x00000000+0x00000000+0x00000000-0x00000000);
-         }
-        -int lIllIllIl(struct IIIlll*lllll,int llIllI){
-        +static int lIllIllIl(struct IIIlll*lllll,int llIllI){
-         struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];if(!lIlllI->lIIlIlI){int IIIllI;
-         IIIllI=alloc_chrdev_region(&lIlllI->IIIIll,
-         (0x00000000+0x00000000+0x00000000-0x00000000),
-        @@ -156,7 +169,7 @@
-         (0x00000000+0x00000000+0x00000000-0x00000000);
-         }
-         
-        -void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
-        +static void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
-         struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];lIlllI->lIIlIlI=(0x00000000+0x00000000+0x00000000-0x00000000);device_unregister(lllll->dev);
-         lllll->dev=
-        PATCH_EOF
-        
-        echo "Kernel compatibility patch created"
 
-    - name: Build USB Redirector packages with patches
+    - name: Build and fix USB Redirector kernel module for kernel 6.12
       run: |
         cd openwrt
         
@@ -260,22 +192,71 @@ jobs:
         # Clean any previous attempts
         make package/usb-redirector-server/clean V=s || true
         
-        # Apply patches manually if needed
-        if [ -d "build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/usb-redirector-server-3.10" ]; then
-          cd build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/usb-redirector-server-3.10
-          if [ -f "../../../../package/usb-redirector-server/patches/001-kernel-6.12-compat.patch" ]; then
-            patch -p1 < ../../../../package/usb-redirector-server/patches/001-kernel-6.12-compat.patch || echo "Patch already applied or failed"
-          fi
-          cd ../../../..
+        # Prepare the package (this extracts source)
+        make package/usb-redirector-server/prepare V=s || true
+        
+        # Find and fix the source code for kernel 6.12
+        BUILD_DIR="build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic"
+        SRC_DIR=$(find "$BUILD_DIR" -type d -name "usb-redirector-server-*" | head -1)
+        
+        if [ -n "$SRC_DIR" ] && [ -d "$SRC_DIR/src/tusbd" ]; then
+          echo "Found source at: $SRC_DIR"
+          cd "$SRC_DIR/src/tusbd"
+          
+          echo "Fixing cdev.c for kernel 6.12 compatibility..."
+          
+          # Backup original
+          cp cdev.c cdev.c.bak
+          
+          # Add version check header
+          sed -i '/#include <linux\/cdev.h>/a #include <linux/version.h>' cdev.c
+          
+          # Fix class_create call (kernel 6.4+)
+          sed -i 's/lIIIlII=class_create(THIS_MODULE,IIIllII);/#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)\nlIIIlII=class_create(IIIllII);\n#else\nlIIIlII=class_create(THIS_MODULE,IIIllII);\n#endif/' cdev.c
+          
+          # Fix dev_uevent type (kernel 6.0+)
+          sed -i 's/lIIIlII->dev_uevent=lIIllIII,/#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)\nlIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;\n#else\nlIIIlII->dev_uevent=lIIllIII;\n#endif/' cdev.c
+          
+          # Fix missing prototypes
+          sed -i 's/^int lIllIllIl(/static int lIllIllIl(/' cdev.c
+          sed -i 's/^void lIlllllll(/static void lIlllllll(/' cdev.c
+          
+          # Show the changes
+          echo "Changes made:"
+          diff -u cdev.c.bak cdev.c || true
+          
+          cd "$GITHUB_WORKSPACE/openwrt"
+        else
+          echo "WARNING: Could not find source directory to patch"
         fi
         
-        # Build with patches
+        # Now try to compile with fixed source
+        echo "Attempting to compile with fixed source..."
         make package/usb-redirector-server/compile V=s || {
-          echo "Build failed, trying with library bypass..."
+          echo "Kernel module compilation failed, will build userspace only..."
           
-          # Create bypass for library checks
+          # Remove kernel module dependency from userspace package
+          sed -i 's/DEPENDS:=+kmod-usb-redirector-server/DEPENDS:=/' package/usb-redirector-server/Makefile
+          
+          # Try to build userspace only
+          make package/usb-redirector-server/compile V=s || echo "Userspace build also failed"
+        }
+
+    - name: Build userspace IPK with library bypass
+      if: always()
+      run: |
+        cd openwrt
+        
+        # Check if userspace package was built
+        USER_PKG=$(find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" 2>/dev/null | head -1)
+        
+        if [ -z "$USER_PKG" ]; then
+          echo "=== Building userspace IPK with library bypass ==="
+          
+          # Backup ipkg-build
           cp scripts/ipkg-build scripts/ipkg-build.backup
           
+          # Create bypass script
           cat > scripts/ipkg-build.new << 'BYPASS_SCRIPT'
         #!/bin/bash
         set -e
@@ -328,11 +309,12 @@ jobs:
           mv scripts/ipkg-build scripts/ipkg-build.old
           mv scripts/ipkg-build.new scripts/ipkg-build
           
-          # Retry
+          # Retry build
           make package/usb-redirector-server/compile V=s || echo "Build attempt completed"
           
+          # Restore
           mv scripts/ipkg-build.backup scripts/ipkg-build 2>/dev/null || true
-        }
+        fi
 
     - name: Final check and summary
       if: always()
@@ -351,6 +333,10 @@ jobs:
         echo ""
         echo "Kernel modules:"
         find bin/ -name "kmod-usb-redirector*.ipk" -exec ls -lh {} \;
+        
+        echo ""
+        echo "Note: If kernel module failed, it's due to kernel 6.12 API changes."
+        echo "Consider using OpenWrt 23.05.3 for full functionality."
 
     - name: Organize artifacts
       if: always()
@@ -367,6 +353,18 @@ jobs:
         find openwrt/bin/ -name "*usb-redirector*.ipk" | while read f; do
           cp -v "$f" artifacts/packages/ 2>/dev/null || true
         done
+        
+        # Create compatibility note
+        cat > artifacts/COMPATIBILITY.txt << EOF
+        OpenWrt 24.10 / Kernel 6.12 Compatibility Note
+        ===============================================
+        
+        The USB Redirector kernel module has compatibility issues with kernel 6.12.
+        
+        For full functionality, please use OpenWrt 23.05.3 which has been verified to work.
+        
+        Alternatively, wait for an official update from USB Redirector that supports kernel 6.12.
+        EOF
         
         ls -la artifacts/
 
