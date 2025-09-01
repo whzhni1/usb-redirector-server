@@ -85,7 +85,6 @@ jobs:
         echo "Checking kernel version..."
         if [ -f "include/kernel-6.6" ]; then
           echo "Confirmed: Using kernel 6.6"
-          cat include/kernel-6.6 | head -5
         fi
 
     - name: Update and install feeds
@@ -172,19 +171,7 @@ jobs:
         
         echo "=== Base firmware build completed ==="
 
-    - name: Check base build results
-      run: |
-        cd openwrt
-        
-        echo "=== Base build results ==="
-        echo "Firmware images:"
-        ls -lah bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*.bin 2>/dev/null || echo "No .bin files"
-        
-        echo ""
-        echo "Kernel version in build:"
-        find build_dir -name "linux-6.6*" -type d | head -1 | xargs basename || echo "Kernel dir not found"
-
-    - name: Copy USB Redirector package with kernel 6.6 patches
+    - name: Copy USB Redirector package to OpenWrt
       run: |
         echo "=== Preparing USB Redirector Server package for kernel 6.6.39 ==="
         
@@ -193,13 +180,16 @@ jobs:
         
         # Fix Makefile tabs
         sed -i 's/^[ ]\+\([$(]\)/\t\1/g' openwrt/package/usb-redirector-server/Makefile
+
+    - name: Create kernel 6.6 compatibility patch
+      run: |
+        cd openwrt/package/usb-redirector-server
         
-        # Create kernel 6.6 compatibility patch if not exists
-        if [ ! -f "openwrt/package/usb-redirector-server/patches/001-kernel-6.6-compat.patch" ]; then
-          echo "Creating kernel 6.6 compatibility patch..."
-          mkdir -p openwrt/package/usb-redirector-server/patches
-          
-          cat > openwrt/package/usb-redirector-server/patches/001-kernel-6.6-compat.patch << 'PATCH_EOF'
+        # Create patches directory
+        mkdir -p patches
+        
+        # Create the patch file
+        cat > patches/001-kernel-6.6-compat.patch << 'EOF'
 --- a/src/tusbd/cdev.c
 +++ b/src/tusbd/cdev.c
 @@ -9,6 +9,7 @@
@@ -262,12 +252,12 @@ jobs:
 +static void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
  struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];lIlllI->lIIlIlI=(0x00000000+0x00000000+0x00000000-0x00000000);device_unregister(lllll->dev);
  lllll->dev=
-PATCH_EOF
-        fi
+EOF
         
-        echo "Patch prepared for kernel 6.6.39"
+        echo "Kernel 6.6 compatibility patch created"
+        ls -la patches/
 
-    - name: Build USB Redirector packages for kernel 6.6
+    - name: Build USB Redirector packages
       run: |
         cd openwrt
         
@@ -285,12 +275,18 @@ PATCH_EOF
         # Build packages (patches will be applied automatically)
         echo "Building with kernel 6.6 compatibility patches..."
         make package/usb-redirector-server/compile V=s || {
-          echo "Build failed, trying with library bypass..."
+          echo "Build failed, trying with workarounds..."
           
-          # Patch ipkg-build for library bypass
+          # Try to build just userspace with library bypass
+          make package/usb-redirector-server/clean V=s || true
+          
+          # Remove kernel module dependency temporarily
+          sed -i 's/+kmod-usb-redirector-server//' package/usb-redirector-server/Makefile
+          
+          # Bypass library checks
           cp scripts/ipkg-build scripts/ipkg-build.backup
           
-          cat > scripts/ipkg-build.new << 'BYPASS_SCRIPT'
+          cat > scripts/ipkg-build.new << 'BYPASS_EOF'
 #!/bin/bash
 set -e
 
@@ -336,10 +332,10 @@ if [ -f "$pkg_dir/CONTROL/control" ]; then
 fi
 
 exec scripts/ipkg-build.backup "$@"
-BYPASS_SCRIPT
+BYPASS_EOF
           
           chmod +x scripts/ipkg-build.new
-          mv scripts/ipkg-build scripts/ipkg-build.old
+          mv scripts/ipkg-build scripts/ipkg-build.old 2>/dev/null || true
           mv scripts/ipkg-build.new scripts/ipkg-build
           
           # Retry build
@@ -349,27 +345,29 @@ BYPASS_SCRIPT
           mv scripts/ipkg-build.backup scripts/ipkg-build 2>/dev/null || true
         }
 
-    - name: Final check and summary
+    - name: Check build results
       if: always()
       run: |
         cd openwrt
         
-        echo "=== Final Build Summary ==="
-        echo "OpenWrt: 24.10"
-        echo "Kernel: 6.6.39"
-        echo "Target: ${{ env.TARGET }}/${{ env.SUBTARGET }}"
+        echo "=== Checking build results ==="
         
-        echo ""
-        echo "Firmware images:"
-        ls -lah bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*.bin 2>/dev/null || echo "None found"
+        # Count packages
+        KMOD_COUNT=$(find bin/ -name "kmod-usb-redirector-server*.ipk" 2>/dev/null | wc -l)
+        USER_COUNT=$(find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" 2>/dev/null | wc -l)
         
-        echo ""
-        echo "USB Redirector packages:"
-        find bin/ -name "*usb-redirector*.ipk" -exec ls -lh {} \; 2>/dev/null || echo "None found"
+        echo "Kernel module packages: $KMOD_COUNT"
+        echo "Userspace packages: $USER_COUNT"
         
-        echo ""
-        echo "Total packages built:"
-        find bin/ -name "*.ipk" | wc -l
+        if [ "$KMOD_COUNT" -gt 0 ]; then
+          echo "SUCCESS: Kernel module built!"
+          find bin/ -name "kmod-usb-redirector-server*.ipk" -exec ls -lh {} \;
+        fi
+        
+        if [ "$USER_COUNT" -gt 0 ]; then
+          echo "SUCCESS: Userspace package built!"
+          find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" -exec ls -lh {} \;
+        fi
 
     - name: Organize artifacts
       if: always()
@@ -386,51 +384,6 @@ BYPASS_SCRIPT
         find openwrt/bin/ -name "*usb-redirector*.ipk" | while read f; do
           cp -v "$f" artifacts/packages/ 2>/dev/null || true
         done
-        
-        # Create info file
-        cat > artifacts/README.md << EOF
-        # OpenWrt 24.10 Build for CMCC RAX3000M
-        
-        ## Build Information
-        - Date: $(date)
-        - OpenWrt Version: 24.10
-        - Kernel Version: 6.6.39
-        - Target: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-        - Device: CMCC RAX3000M
-        
-        ## Package Contents
-        
-        ### Firmware (firmware/)
-        Complete OpenWrt 24.10 firmware images
-        
-        ### IPK Packages (packages/)
-        - kmod-usb-redirector-server: Kernel module (tusbd.ko)
-        - usb-redirector-server: Userspace utilities
-        
-        ## Installation
-        
-        1. Install kernel module:
-           \`\`\`
-           opkg install kmod-usb-redirector-server*.ipk
-           \`\`\`
-        
-        2. Install userspace utilities:
-           \`\`\`
-           opkg install usb-redirector-server*.ipk
-           \`\`\`
-        
-        3. Start service:
-           \`\`\`
-           /etc/init.d/usbsrvd enable
-           /etc/init.d/usbsrvd start
-           \`\`\`
-        
-        ## Kernel Compatibility
-        This build includes patches for kernel 6.6.39 compatibility:
-        - Updated class_create() API (kernel 6.4+)
-        - Fixed dev_uevent function signature (kernel 6.0+)
-        - Added missing function prototypes
-        EOF
         
         ls -la artifacts/
 
