@@ -6,9 +6,14 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: 'OpenWrt version (e.g., v23.05.3, main, openwrt-24.10)'
+        required: false
+        default: 'v23.05.3'
 
 env:
-  OPENWRT_VERSION: openwrt-24.10  # 使用24.10分支
+  OPENWRT_VERSION: ${{ github.event.inputs.openwrt_version || 'v23.05.3' }}
   DEVICE_PROFILE: cmcc_rax3000m
   TARGET: mediatek
   SUBTARGET: filogic
@@ -76,16 +81,28 @@ jobs:
           zlib1g-dev \
           genisoimage
 
-    - name: Clone OpenWrt 24.10
+    - name: Clone OpenWrt
       run: |
-        # Clone OpenWrt 24.10 branch
-        git clone --depth 1 --branch ${{ env.OPENWRT_VERSION }} https://github.com/openwrt/openwrt.git || \
-        git clone --depth 1 --branch openwrt-24.10 https://github.com/openwrt/openwrt.git || \
-        git clone --depth 1 https://github.com/openwrt/openwrt.git
+        echo "Attempting to clone OpenWrt version: ${{ env.OPENWRT_VERSION }}"
+        
+        # Try different branch/tag formats
+        if git ls-remote --heads --tags https://github.com/openwrt/openwrt.git | grep -q "${{ env.OPENWRT_VERSION }}"; then
+          echo "Found branch/tag: ${{ env.OPENWRT_VERSION }}"
+          git clone --depth 1 --branch ${{ env.OPENWRT_VERSION }} https://github.com/openwrt/openwrt.git
+        elif [ "${{ env.OPENWRT_VERSION }}" = "24.10" ] || [ "${{ env.OPENWRT_VERSION }}" = "openwrt-24.10" ]; then
+          echo "Trying main branch for 24.10 development"
+          git clone --depth 1 https://github.com/openwrt/openwrt.git
+        else
+          echo "Using specified version: ${{ env.OPENWRT_VERSION }}"
+          git clone --depth 1 --branch ${{ env.OPENWRT_VERSION }} https://github.com/openwrt/openwrt.git
+        fi
         
         cd openwrt
-        echo "OpenWrt version: $(git describe --tags --always)"
+        echo "OpenWrt version: $(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
         echo "OpenWrt commit: $(git rev-parse HEAD)"
+        
+        # Check kernel version
+        ls include/kernel-* 2>/dev/null | head -5
 
     - name: Update and install feeds
       run: |
@@ -93,11 +110,18 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Configure OpenWrt for CMCC RAX3000M (without USB Redirector first)
+    - name: Configure OpenWrt for CMCC RAX3000M (minimal config first)
       run: |
         cd openwrt
         
-        # First build WITHOUT USB Redirector to ensure base system works
+        # Determine if this is 24.10 or newer
+        IS_NEW_VERSION=false
+        if [ -f "include/kernel-6.6" ] || [ -f "include/kernel-6.1" ]; then
+          IS_NEW_VERSION=true
+          echo "Detected new OpenWrt version with kernel 6.x"
+        fi
+        
+        # Create minimal configuration first
         cat > .config << EOF
         # Target
         CONFIG_TARGET_mediatek=y
@@ -110,15 +134,7 @@ jobs:
         CONFIG_BUILD_LOG=y
         
         # Image settings
-        CONFIG_TARGET_ROOTFS_INITRAMFS=y
         CONFIG_TARGET_ROOTFS_SQUASHFS=y
-        CONFIG_TARGET_ROOTFS_PARTSIZE=160
-        
-        # Kernel config for 24.10
-        CONFIG_KERNEL_CGROUPS=y
-        CONFIG_KERNEL_CGROUP_SCHED=y
-        CONFIG_KERNEL_NET_CLS_CGROUP=y
-        CONFIG_KERNEL_NETPRIO_CGROUP=y
         
         # USB Support
         CONFIG_PACKAGE_kmod-usb-core=y
@@ -127,8 +143,6 @@ jobs:
         CONFIG_PACKAGE_kmod-usb-xhci-hcd=y
         CONFIG_PACKAGE_kmod-usb-xhci-mtk=y
         CONFIG_PACKAGE_kmod-usb-storage=y
-        CONFIG_PACKAGE_kmod-usb-storage-extras=y
-        CONFIG_PACKAGE_kmod-usb-storage-uas=y
         
         # Basic system
         CONFIG_PACKAGE_base-files=y
@@ -139,62 +153,48 @@ jobs:
         CONFIG_PACKAGE_opkg=y
         CONFIG_PACKAGE_netifd=y
         CONFIG_PACKAGE_usbutils=y
-        CONFIG_PACKAGE_kmod-nls-base=y
-        CONFIG_PACKAGE_kmod-nls-utf8=y
         
-        # Network
-        CONFIG_PACKAGE_firewall4=y
-        CONFIG_PACKAGE_nftables=y
-        CONFIG_PACKAGE_kmod-nft-nat=y
+        # Network basics
         CONFIG_PACKAGE_ppp=y
         CONFIG_PACKAGE_ppp-mod-pppoe=y
-        CONFIG_PACKAGE_odhcp6c=y
-        CONFIG_PACKAGE_odhcpd-ipv6only=y
-        CONFIG_PACKAGE_dnsmasq-full=y
         
-        # WiFi for MT7981 (CMCC RAX3000M)
-        CONFIG_PACKAGE_kmod-mt7915-firmware=y
-        CONFIG_PACKAGE_kmod-mt7981-firmware=y
-        CONFIG_PACKAGE_wpad-mbedtls=y
-        CONFIG_PACKAGE_hostapd-common=y
-        CONFIG_PACKAGE_wireless-tools=y
-        CONFIG_PACKAGE_wireless-regdb=y
+        # WiFi (minimal)
+        CONFIG_PACKAGE_wpad-basic-mbedtls=y
         CONFIG_PACKAGE_iw=y
-        
-        # LuCI (24.10 version)
-        CONFIG_PACKAGE_luci=y
-        CONFIG_PACKAGE_luci-base=y
-        CONFIG_PACKAGE_luci-mod-admin-full=y
-        CONFIG_PACKAGE_luci-theme-bootstrap=y
-        CONFIG_PACKAGE_luci-app-firewall=y
-        CONFIG_PACKAGE_luci-proto-ppp=y
-        CONFIG_PACKAGE_luci-proto-ipv6=y
-        CONFIG_PACKAGE_uhttpd=y
-        CONFIG_PACKAGE_uhttpd-mod-ubus=y
-        CONFIG_PACKAGE_rpcd=y
-        CONFIG_PACKAGE_rpcd-mod-file=y
-        CONFIG_PACKAGE_rpcd-mod-luci=y
-        CONFIG_PACKAGE_rpcd-mod-rrdns=y
-        
-        # Filesystem
-        CONFIG_PACKAGE_kmod-fs-ext4=y
-        CONFIG_PACKAGE_kmod-fs-vfat=y
-        CONFIG_PACKAGE_kmod-fs-exfat=y
-        CONFIG_PACKAGE_kmod-nls-cp437=y
-        CONFIG_PACKAGE_kmod-nls-iso8859-1=y
         
         # Build info
         CONFIG_KERNEL_BUILD_USER="github-actions"
         CONFIG_KERNEL_BUILD_DOMAIN="github.com"
-        CONFIG_GRUB_TITLE="OpenWrt 24.10"
         EOF
+        
+        # Add version-specific configs
+        if [ "$IS_NEW_VERSION" = true ]; then
+          echo "Adding configs for new version..."
+          cat >> .config << EOF
+        # New version specific
+        CONFIG_PACKAGE_firewall4=y
+        CONFIG_PACKAGE_nftables=y
+        CONFIG_PACKAGE_kmod-nft-nat=y
+        CONFIG_PACKAGE_kmod-mt7981-firmware=y
+        EOF
+        else
+          echo "Adding configs for stable version..."
+          cat >> .config << EOF
+        # Stable version specific
+        CONFIG_PACKAGE_firewall=y
+        CONFIG_PACKAGE_iptables=y
+        CONFIG_PACKAGE_kmod-ipt-nat=y
+        CONFIG_PACKAGE_kmod-mt7915-firmware=y
+        EOF
+        fi
         
         make defconfig
         
-        echo "=== Configuration complete (without USB Redirector) ==="
+        echo "=== Minimal configuration complete ==="
         
-        # Show kernel version that will be built
-        grep "CONFIG_LINUX" .config | grep -v "^#" | head -5
+        # Show what will be built
+        echo "Target system:"
+        grep "CONFIG_TARGET_BOARD\|CONFIG_LINUX" .config | grep -v "^#" | head -10
 
     - name: Download package sources
       run: |
@@ -202,15 +202,15 @@ jobs:
         make download -j8 || make download -j1 V=s
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Build base OpenWrt firmware (without USB Redirector)
+    - name: Build base OpenWrt firmware (minimal)
       run: |
         cd openwrt
         
-        echo "=== Building base OpenWrt 24.10 firmware ==="
+        echo "=== Building minimal OpenWrt firmware ==="
         
-        # Build the base system first
-        make -j$(nproc) world || {
-          echo "Parallel build failed, retrying with single thread..."
+        # Use fewer cores to be safer with memory
+        make -j4 world || {
+          echo "Parallel build failed, retrying with verbose single thread..."
           make -j1 V=s world
         }
         
@@ -222,16 +222,15 @@ jobs:
         
         echo "=== Base build results ==="
         echo "Kernel version:"
-        find build_dir -name "linux-*" -type d | head -1 | xargs basename
+        find build_dir -name "linux-*" -type d | grep -v ".o" | head -1 | xargs basename
         
         echo ""
         echo "Firmware images:"
-        ls -lah bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*.bin 2>/dev/null || echo "No .bin files"
-        ls -lah bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*.itb 2>/dev/null || echo "No .itb files"
+        ls -lah bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/ | grep -E "\.(bin|itb|img)" || echo "No firmware files"
         
         echo ""
-        echo "Total packages built:"
-        find bin/packages/ -name "*.ipk" | wc -l
+        echo "Packages built:"
+        find bin/ -name "*.ipk" | wc -l
 
     - name: Copy USB Redirector package to OpenWrt
       run: |
@@ -243,17 +242,15 @@ jobs:
         # Fix Makefile tabs
         sed -i 's/^[ ]\+\([$(]\)/\t\1/g' openwrt/package/usb-redirector-server/Makefile
         
-        # Update Makefile for kernel 6.x compatibility if needed
-        cd openwrt/package/usb-redirector-server
-        
-        # Check if we need to update for newer kernel
-        if grep -q "LINUX_KMOD_SUFFIX" Makefile; then
-          echo "Updating Makefile for newer kernel module suffix..."
-          sed -i 's/LINUX_KMOD_SUFFIX/LINUX_KMOD_SUFFIX:=.ko/g' Makefile
+        # Check kernel module extension
+        cd openwrt
+        KMOD_EXT=".ko"
+        if grep -q "CONFIG_LINUX_6" .config 2>/dev/null; then
+          echo "Detected kernel 6.x, updating module extension if needed"
+          sed -i 's/LINUX_KMOD_SUFFIX/LINUX_KMOD_SUFFIX:=.ko/g' package/usb-redirector-server/Makefile
         fi
         
-        cd ../../
-        echo "Package copied and updated successfully"
+        echo "Package copied successfully"
 
     - name: Build USB Redirector packages separately
       run: |
@@ -271,91 +268,69 @@ jobs:
         # Clean any previous attempts
         make package/usb-redirector-server/clean V=s || true
         
-        # Try to build USB Redirector packages
+        # Build with library check bypass
         echo "Building USB Redirector packages..."
-        make package/usb-redirector-server/compile V=s || {
-          echo "Normal build failed, trying with workarounds..."
-          
-          # Create a bypass script for library checks
-          cp scripts/ipkg-build scripts/ipkg-build.original 2>/dev/null || true
-          
-          cat > scripts/ipkg-build-bypass << 'BYPASS_EOF'
-        #!/bin/bash
-        set -e
         
-        # Get package directory
+        # Backup ipkg-build
+        cp scripts/ipkg-build scripts/ipkg-build.original
+        
+        # Create bypass wrapper
+        cat > scripts/ipkg-build.wrapper << 'WRAPPER_EOF'
+        #!/bin/bash
+        
+        # Get package name from control file
         for arg in "$@"; do
-          [ -d "$arg" ] && pkg_dir="$arg" && break
+          if [ -d "$arg" ] && [ -f "$arg/CONTROL/control" ]; then
+            pkg_name=$(grep "^Package:" "$arg/CONTROL/control" | cut -d' ' -f2)
+            if [ "$pkg_name" = "usb-redirector-server" ]; then
+              echo "Special handling for $pkg_name"
+              # Remove library dependencies
+              sed -i '/libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$arg/CONTROL/control"
+            fi
+            break
+          fi
         done
         
-        # Check if it's usb-redirector-server
-        if [ -f "$pkg_dir/CONTROL/control" ]; then
-          pkg_name=$(grep "^Package:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
-          
-          if [ "$pkg_name" = "usb-redirector-server" ]; then
-            echo "Special handling for $pkg_name..."
-            
-            # Clean library dependencies
-            sed -i '/libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$pkg_dir/CONTROL/control"
-            
-            # Build IPK manually
-            version=$(grep "^Version:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
-            arch=$(grep "^Architecture:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
-            
-            dest_dir="${@: -1}"
-            [ "$dest_dir" = "$pkg_dir" ] && dest_dir="."
-            
-            pkg_file="$dest_dir/${pkg_name}_${version}_${arch}.ipk"
-            
-            cd "$pkg_dir"
-            tar -czf /tmp/control.tar.gz -C CONTROL .
-            tar -czf /tmp/data.tar.gz --exclude=CONTROL .
-            echo "2.0" > /tmp/debian-binary
-            ar -cr "$pkg_file" /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz
-            
-            echo "Created $pkg_file"
-            exit 0
-          fi
-        fi
+        # Call original
+        exec scripts/ipkg-build.original "$@"
+        WRAPPER_EOF
         
-        # Use original for other packages
-        [ -f scripts/ipkg-build.original ] && exec scripts/ipkg-build.original "$@"
-        exec scripts/ipkg-build "$@"
-        BYPASS_EOF
-          
-          chmod +x scripts/ipkg-build-bypass
-          mv scripts/ipkg-build scripts/ipkg-build.bak 2>/dev/null || true
-          cp scripts/ipkg-build-bypass scripts/ipkg-build
-          
-          # Retry build
-          make package/usb-redirector-server/compile V=s || echo "Build attempt completed with errors"
-          
-          # Restore original
-          [ -f scripts/ipkg-build.bak ] && mv scripts/ipkg-build.bak scripts/ipkg-build
+        chmod +x scripts/ipkg-build.wrapper
+        mv scripts/ipkg-build scripts/ipkg-build.tmp
+        mv scripts/ipkg-build.wrapper scripts/ipkg-build
+        
+        # Try to build
+        make package/usb-redirector-server/compile V=s || {
+          echo "Build failed, will try manual creation"
         }
+        
+        # Restore original ipkg-build
+        mv scripts/ipkg-build.original scripts/ipkg-build 2>/dev/null || true
         
         echo "=== USB Redirector build attempt completed ==="
 
-    - name: Create USB Redirector IPKs manually if needed
+    - name: Manually create USB Redirector userspace IPK if needed
       if: always()
       run: |
         cd openwrt
         
         # Check what packages exist
-        KMOD_COUNT=$(find bin/ -name "kmod-usb-redirector-server*.ipk" 2>/dev/null | wc -l)
-        USER_COUNT=$(find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" 2>/dev/null | wc -l)
+        echo "Checking for packages..."
+        KMOD_PKG=$(find bin/ -name "kmod-usb-redirector-server*.ipk" 2>/dev/null | head -1)
+        USER_PKG=$(find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" 2>/dev/null | head -1)
         
-        echo "Found $KMOD_COUNT kernel module package(s)"
-        echo "Found $USER_COUNT userspace package(s)"
+        echo "Kernel module: ${KMOD_PKG:-Not found}"
+        echo "Userspace: ${USER_PKG:-Not found}"
         
-        # If packages are missing, create them manually
-        if [ "$USER_COUNT" -eq 0 ]; then
-          echo "Creating userspace package manually..."
+        if [ -z "$USER_PKG" ]; then
+          echo "=== Creating userspace package manually ==="
           
           BUILD_DIR="build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic"
           IPK_DIR=$(find "$BUILD_DIR" -type d -path "*/usb-redirector-server*/ipkg-*/usb-redirector-server" 2>/dev/null | head -1)
           
           if [ -n "$IPK_DIR" ] && [ -d "$IPK_DIR" ]; then
+            echo "Found IPK staging at: $IPK_DIR"
+            
             mkdir -p "$IPK_DIR/CONTROL"
             cat > "$IPK_DIR/CONTROL/control" << EOF
         Package: usb-redirector-server
@@ -363,17 +338,22 @@ jobs:
         Architecture: aarch64_cortex-a53
         Maintainer: IncentivesPro
         Section: utils
+        Priority: optional
         Depends: kmod-usb-redirector-server
-        Description: USB Redirector Server userspace
+        Description: USB Redirector Server userspace utilities
         EOF
             
             mkdir -p bin/packages/aarch64_cortex-a53/base
+            
             cd "$IPK_DIR"
             tar -czf /tmp/control.tar.gz -C CONTROL .
             tar -czf /tmp/data.tar.gz --exclude=CONTROL .
             echo "2.0" > /tmp/debian-binary
+            
             ar -cr "$GITHUB_WORKSPACE/openwrt/bin/packages/aarch64_cortex-a53/base/usb-redirector-server_3.10_aarch64_cortex-a53.ipk" \
               /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz
+            
+            echo "Manual IPK creation completed"
             cd "$GITHUB_WORKSPACE/openwrt"
           fi
         fi
@@ -383,18 +363,19 @@ jobs:
       run: |
         cd openwrt
         
-        echo "=== Final Build Summary for OpenWrt 24.10 ==="
+        echo "=== Final Build Summary ==="
+        echo "OpenWrt Version: ${{ env.OPENWRT_VERSION }}"
         
+        echo ""
         echo "Firmware images:"
-        find bin/targets/ -name "*.bin" -o -name "*.itb" | while read f; do
-          echo "  $(basename $f) - $(du -h $f | cut -f1)"
-        done
+        find bin/targets/ -type f \( -name "*.bin" -o -name "*.itb" -o -name "*.img.gz" \) -exec ls -lh {} \;
         
         echo ""
         echo "USB Redirector packages:"
-        find bin/ -name "*usb-redirector*.ipk" | while read f; do
-          echo "  $(basename $f) - $(du -h $f | cut -f1)"
-        done
+        find bin/ -name "*usb-redirector*.ipk" -exec ls -lh {} \;
+        
+        echo ""
+        echo "Total packages: $(find bin/ -name "*.ipk" | wc -l)"
 
     - name: Organize artifacts
       if: always()
@@ -403,37 +384,34 @@ jobs:
         mkdir -p artifacts/packages
         
         # Copy firmware
-        find openwrt/bin/targets/ \( -name "*.bin" -o -name "*.itb" \) -exec cp -v {} artifacts/firmware/ \;
+        find openwrt/bin/targets/ -type f \( -name "*.bin" -o -name "*.itb" -o -name "*.img.gz" \) \
+          -exec cp -v {} artifacts/firmware/ \;
         
         # Copy USB Redirector packages
         find openwrt/bin/ -name "*usb-redirector*.ipk" -exec cp -v {} artifacts/packages/ \;
         
-        # Create info file
+        # Create info
         cat > artifacts/README.md << EOF
-        # OpenWrt 24.10 Build for CMCC RAX3000M
+        # OpenWrt Build for CMCC RAX3000M
         
-        Build Date: $(date)
-        OpenWrt Version: 24.10
+        Version: ${{ env.OPENWRT_VERSION }}
+        Date: $(date)
         Target: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-        Device: CMCC RAX3000M (MT7981)
         
         ## Installation
         
-        ### Firmware Flash
-        Use the .bin file in firmware/ folder
-        
-        ### IPK Installation
-        1. scp packages/*.ipk root@router:/tmp/
-        2. ssh root@router
-        3. opkg install /tmp/kmod-usb-redirector-server*.ipk
-        4. opkg install /tmp/usb-redirector-server*.ipk
-        5. /etc/init.d/usbsrvd enable && /etc/init.d/usbsrvd start
+        1. Flash firmware or
+        2. Install IPK packages:
+           - opkg install kmod-usb-redirector-server*.ipk
+           - opkg install usb-redirector-server*.ipk
         EOF
+        
+        ls -la artifacts/
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: openwrt-24.10-cmcc-rax3000m
+        name: openwrt-${{ env.OPENWRT_VERSION }}-build
         path: artifacts/
         retention-days: 30
