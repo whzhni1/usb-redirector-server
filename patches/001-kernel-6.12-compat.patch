@@ -8,7 +8,18 @@
  #include <linux/cdev.h>
  #include "usbd.h"
  #include "cdev.h"
-@@ -40,7 +41,11 @@
+@@ -17,6 +18,10 @@
+ 
+ #include "public_devices.h"
+ 
++/* Forward declarations to fix missing prototype warnings */
++static int lIllIllIl(struct IIIlll*lllll,int llIllI);
++static void lIlllllll(struct IIIlll*lllll,int llIllI);
++
+ static struct class*lIIIlII;static DEFINE_MUTEX(lIIIlIl);static int lIIIllI;struct 
+ lIlIllI{int lIIlIlI;dev_t IIIIll;struct cdev llIlII;struct IIIlll lllll;};static 
+ struct lIlIllI lllIlI[(0x0000000F+0x00000FF1+0x00000001-0x00001000)];static int 
+@@ -40,7 +45,11 @@
  );
  do{
  mutex_init(&lIIIlIl);
@@ -20,7 +31,7 @@
  if(lIIIlII==
  
  NULL||IS_ERR(lIIIlII)){lIlIlI(
-@@ -49,7 +54,11 @@
+@@ -49,7 +58,11 @@
  ,lIIIlII);return PTR_ERR(lIIIlII);
  }
  
@@ -32,7 +43,7 @@
  
  0;if(IIIlllIl()){if(lIIIlII){
  class_destroy(lIIIlII),lIIIlII=
-@@ -119,7 +128,7 @@
+@@ -119,7 +132,7 @@
  
  0;return(0x00000000+0x00000000+0x00000000-0x00000000);
  }
@@ -41,7 +52,7 @@
  struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];if(!lIlllI->lIIlIlI){int IIIllI;
  IIIllI=alloc_chrdev_region(&lIlllI->IIIIll,
  (0x00000000+0x00000000+0x00000000-0x00000000),
-@@ -156,7 +165,7 @@
+@@ -156,7 +169,7 @@
  (0x00000000+0x00000000+0x00000000-0x00000000);
  }
  
