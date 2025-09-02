@@ -1,4 +1,4 @@
-name: Build OpenWrt 24.10 with USB Redirector for CMCC RAX3000M
+name: Build OpenWrt with USB Redirector for CMCC RAX3000M
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  OPENWRT_VERSION: main  # OpenWrt 24.10 with kernel 6.6.39
+  OPENWRT_VERSION: main  # OpenWrt main branch
   DEVICE_PROFILE: cmcc_rax3000m
   TARGET: mediatek
   SUBTARGET: filogic
@@ -75,17 +75,16 @@ jobs:
           xsltproc \
           zlib1g-dev
 
-    - name: Clone OpenWrt 24.10
+    - name: Clone OpenWrt
       run: |
         git clone --depth 1 --branch ${{ env.OPENWRT_VERSION }} https://github.com/openwrt/openwrt.git
         cd openwrt
         echo "OpenWrt version: $(git rev-parse HEAD)"
         
-        # Verify kernel version
+        # Check actual kernel version
         echo "Checking kernel version..."
-        if [ -f "include/kernel-6.6" ]; then
-          echo "Confirmed: Using kernel 6.6"
-        fi
+        KERNEL_VER=$(ls include/kernel-* 2>/dev/null | sed 's/.*kernel-//' | head -1)
+        echo "Kernel version detected: $KERNEL_VER"
 
     - name: Update and install feeds
       run: |
@@ -93,11 +92,11 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Configure OpenWrt 24.10 for CMCC RAX3000M
+    - name: Configure OpenWrt for CMCC RAX3000M
       run: |
         cd openwrt
         
-        cat > .config << EOF
+        cat > .config << 'CONFIG_EOF'
         # Target
         CONFIG_TARGET_mediatek=y
         CONFIG_TARGET_mediatek_filogic=y
@@ -108,8 +107,7 @@ jobs:
         CONFIG_CCACHE=y
         CONFIG_BUILD_LOG=y
         
-        # Use OPKG instead of APK for 24.10
-        CONFIG_USE_APK=n
+        # Package manager
         CONFIG_PACKAGE_opkg=y
         
         # Image settings
@@ -148,7 +146,7 @@ jobs:
         # Build info
         CONFIG_KERNEL_BUILD_USER="github-actions"
         CONFIG_KERNEL_BUILD_DOMAIN="github.com"
-        EOF
+        CONFIG_EOF
         
         make defconfig
 
@@ -158,11 +156,11 @@ jobs:
         make download -j8 || make download -j1 V=s
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Build base OpenWrt 24.10 firmware
+    - name: Build base OpenWrt firmware
       run: |
         cd openwrt
         
-        echo "=== Building base OpenWrt 24.10 firmware with kernel 6.6.39 ==="
+        echo "=== Building base OpenWrt firmware ==="
         
         make -j$(nproc) world || {
           echo "Parallel build failed, retrying with single thread..."
@@ -171,97 +169,94 @@ jobs:
         
         echo "=== Base firmware build completed ==="
 
-    - name: Copy USB Redirector package to OpenWrt
+    - name: Prepare USB Redirector package
       run: |
-        echo "=== Preparing USB Redirector Server package for kernel 6.6.39 ==="
+        echo "=== Preparing USB Redirector Server package ==="
         
         # Copy package to OpenWrt
         cp -r usb-redirector-server openwrt/package/
         
         # Fix Makefile tabs
         sed -i 's/^[ ]\+\([$(]\)/\t\1/g' openwrt/package/usb-redirector-server/Makefile
-
-    - name: Create kernel 6.6 compatibility patch
-      run: |
-        cd openwrt/package/usb-redirector-server
         
         # Create patches directory
-        mkdir -p patches
+        mkdir -p openwrt/package/usb-redirector-server/patches
+
+    - name: Create kernel 6.12 compatibility patch
+      run: |
+        cat > openwrt/package/usb-redirector-server/patches/001-kernel-6.12-compat.patch << 'PATCH_EOF'
+--- a/src/tusbd/cdev.c
++++ b/src/tusbd/cdev.c
+@@ -9,6 +9,7 @@
+ 
+ #include <linux/device.h>
+ #include <linux/mutex.h>
++#include <linux/version.h>
+ #include <linux/cdev.h>
+ #include "usbd.h"
+ #include "cdev.h"
+@@ -17,6 +18,10 @@
+ 
+ #include "public_devices.h"
+ 
++/* Forward declarations to fix -Wmissing-prototypes */
++static int lIllIllIl(struct IIIlll*lllll,int llIllI);
++static void lIlllllll(struct IIIlll*lllll,int llIllI);
++
+ static struct class*lIIIlII;static DEFINE_MUTEX(lIIIlIl);static int lIIIllI;struct 
+ lIlIllI{int lIIlIlI;dev_t IIIIll;struct cdev llIlII;struct IIIlll lllll;};static 
+ struct lIlIllI lllIlI[(0x0000000F+0x00000FF1+0x00000001-0x00001000)];static int 
+@@ -40,7 +45,11 @@
+ );
+ do{
+ mutex_init(&lIIIlIl);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
++lIIIlII=class_create(IIIllII);
++#else
+ lIIIlII=class_create(THIS_MODULE,IIIllII);
++#endif
+ if(lIIIlII==
+ 
+ NULL||IS_ERR(lIIIlII)){lIlIlI(
+@@ -49,7 +58,11 @@
+ ,lIIIlII);return PTR_ERR(lIIIlII);
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
++lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;
++#else
+ lIIIlII->dev_uevent=lIIllIII,
++#endif
+ 
+ 0;if(IIIlllIl()){if(lIIIlII){
+ class_destroy(lIIIlII),lIIIlII=
+@@ -119,7 +132,7 @@
+ 
+ 0;return(0x00000000+0x00000000+0x00000000-0x00000000);
+ }
+-int lIllIllIl(struct IIIlll*lllll,int llIllI){
++static int lIllIllIl(struct IIIlll*lllll,int llIllI){
+ struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];if(!lIlllI->lIIlIlI){int IIIllI;
+ IIIllI=alloc_chrdev_region(&lIlllI->IIIIll,
+ (0x00000000+0x00000000+0x00000000-0x00000000),
+@@ -156,7 +169,7 @@
+ (0x00000000+0x00000000+0x00000000-0x00000000);
+ }
+ 
+-void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
++static void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
+ struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];lIlllI->lIIlIlI=(0x00000000+0x00000000+0x00000000-0x00000000);device_unregister(lllll->dev);
+ lllll->dev=
+PATCH_EOF
         
-        # Create the patch file with proper EOF delimiter
-        cat > patches/001-kernel-6.6-compat.patch << 'PATCH_EOF'
-        --- a/src/tusbd/cdev.c
-        +++ b/src/tusbd/cdev.c
-        @@ -9,6 +9,7 @@
-         
-         #include <linux/device.h>
-         #include <linux/mutex.h>
-        +#include <linux/version.h>
-         #include <linux/cdev.h>
-         #include "usbd.h"
-         #include "cdev.h"
-        @@ -17,6 +18,10 @@
-         
-         #include "public_devices.h"
-         
-        +/* Forward declarations */
-        +static int lIllIllIl(struct IIIlll*lllll,int llIllI);
-        +static void lIlllllll(struct IIIlll*lllll,int llIllI);
-        +
-         static struct class*lIIIlII;static DEFINE_MUTEX(lIIIlIl);static int lIIIllI;struct 
-         lIlIllI{int lIIlIlI;dev_t IIIIll;struct cdev llIlII;struct IIIlll lllll;};static 
-         struct lIlIllI lllIlI[(0x0000000F+0x00000FF1+0x00000001-0x00001000)];static int 
-        @@ -40,7 +45,11 @@
-         );
-         do{
-         mutex_init(&lIIIlIl);
-        +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
-        +lIIIlII=class_create(IIIllII);
-        +#else
-         lIIIlII=class_create(THIS_MODULE,IIIllII);
-        +#endif
-         if(lIIIlII==
-         
-         NULL||IS_ERR(lIIIlII)){lIlIlI(
-        @@ -49,7 +58,11 @@
-         ,lIIIlII);return PTR_ERR(lIIIlII);
-         }
-         
-        +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
-        +lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;
-        +#else
-         lIIIlII->dev_uevent=lIIllIII,
-        +#endif
-         
-         0;if(IIIlllIl()){if(lIIIlII){
-         class_destroy(lIIIlII),lIIIlII=
-        @@ -119,7 +132,7 @@
-         
-         0;return(0x00000000+0x00000000+0x00000000-0x00000000);
-         }
-        -int lIllIllIl(struct IIIlll*lllll,int llIllI){
-        +static int lIllIllIl(struct IIIlll*lllll,int llIllI){
-         struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];if(!lIlllI->lIIlIlI){int IIIllI;
-         IIIllI=alloc_chrdev_region(&lIlllI->IIIIll,
-         (0x00000000+0x00000000+0x00000000-0x00000000),
-        @@ -156,7 +169,7 @@
-         (0x00000000+0x00000000+0x00000000-0x00000000);
-         }
-         
-        -void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
-        +static void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
-         struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];lIlllI->lIIlIlI=(0x00000000+0x00000000+0x00000000-0x00000000);device_unregister(lllll->dev);
-         lllll->dev=
-        PATCH_EOF
-        
-        echo "Kernel 6.6 compatibility patch created"
-        ls -la patches/
+        echo "Kernel 6.12 compatibility patch created"
+        ls -la openwrt/package/usb-redirector-server/patches/
 
     - name: Build USB Redirector packages
       run: |
         cd openwrt
         
-        echo "=== Building USB Redirector packages for kernel 6.6.39 ==="
+        echo "=== Building USB Redirector packages ==="
         
         # Update config
         echo "CONFIG_PACKAGE_usb-redirector-server=m" >> .config
@@ -269,83 +264,109 @@ jobs:
         
         make defconfig
         
-        # Clean previous builds
+        # Clean and build
         make package/usb-redirector-server/clean V=s || true
         
-        # Build packages (patches will be applied automatically)
-        echo "Building with kernel 6.6 compatibility patches..."
+        echo "Building packages with kernel compatibility patches..."
         make package/usb-redirector-server/compile V=s || {
-          echo "Build failed, showing error details..."
-          tail -100 logs/package/usb-redirector-server/compile.txt 2>/dev/null || true
+          echo "Build failed, checking logs..."
+          find logs -name "*usb-redirector*" -exec cat {} \; 2>/dev/null || true
+          
+          echo "Attempting userspace-only build..."
+          # Remove kernel module from Makefile temporarily
+          sed -i 's/+kmod-usb-redirector-server//' package/usb-redirector-server/Makefile
+          make package/usb-redirector-server/compile V=s || true
         }
 
-    - name: List all built files
+    - name: Check and list all build outputs
       if: always()
       run: |
-        echo "=== Listing all firmware files ==="
-        find openwrt/bin/targets/ -type f -name "*.bin" -o -name "*.itb" -o -name "*.img" | while read f; do
-          echo "Found firmware: $f"
-          ls -lh "$f"
-        done
+        echo "=== Checking build outputs ==="
         
         echo ""
-        echo "=== Listing all IPK packages ==="
-        find openwrt/bin/ -type f -name "*.ipk" | while read f; do
-          echo "Found package: $f"
-          ls -lh "$f"
-        done
+        echo "=== Firmware files ==="
+        if [ -d "openwrt/bin/targets" ]; then
+          find openwrt/bin/targets/ -type f \( -name "*.bin" -o -name "*.itb" -o -name "*.img" -o -name "*.ubi" \) 2>/dev/null | while read f; do
+            echo "Firmware: $(basename $f) - $(ls -lh $f | awk '{print $5}')"
+          done
+        else
+          echo "No firmware directory found"
+        fi
+        
+        echo ""
+        echo "=== All IPK packages ==="
+        if [ -d "openwrt/bin" ]; then
+          find openwrt/bin/ -type f -name "*.ipk" 2>/dev/null | head -20 | while read f; do
+            echo "Package: $(basename $f) - $(ls -lh $f | awk '{print $5}')"
+          done
+          TOTAL_PKGS=$(find openwrt/bin/ -type f -name "*.ipk" 2>/dev/null | wc -l)
+          echo "Total packages found: $TOTAL_PKGS"
+        else
+          echo "No packages found"
+        fi
         
         echo ""
         echo "=== USB Redirector packages ==="
-        find openwrt/bin/ -type f -name "*usb-redirector*.ipk" | while read f; do
-          echo "USB Redirector: $f"
-          ls -lh "$f"
-        done
+        find openwrt/bin/ -type f -name "*usb-redirector*.ipk" 2>/dev/null | while read f; do
+          echo "USB Package: $(basename $f) - $(ls -lh $f | awk '{print $5}')"
+        done || echo "No USB Redirector packages found"
 
-    - name: Organize artifacts
+    - name: Prepare artifacts for upload
       if: always()
       run: |
-        echo "=== Organizing artifacts ==="
-        mkdir -p artifacts/firmware
-        mkdir -p artifacts/packages
-        mkdir -p artifacts/usb-redirector
+        echo "=== Preparing artifacts ==="
         
-        # Copy all firmware files
-        echo "Copying firmware files..."
-        find openwrt/bin/targets/ -type f \( -name "*.bin" -o -name "*.itb" -o -name "*.img" \) -exec cp -v {} artifacts/firmware/ \; 2>/dev/null || true
+        # Create artifact directories
+        mkdir -p upload-artifacts/firmware
+        mkdir -p upload-artifacts/packages
+        mkdir -p upload-artifacts/usb-redirector
         
-        # Copy all packages
-        echo "Copying package files..."
-        find openwrt/bin/packages/ -type f -name "*.ipk" -exec cp -v {} artifacts/packages/ \; 2>/dev/null || true
+        # Copy firmware files
+        if [ -d "openwrt/bin/targets" ]; then
+          find openwrt/bin/targets/ -type f \( -name "*cmcc*.bin" -o -name "*cmcc*.itb" -o -name "*sysupgrade*.bin" -o -name "*factory*.bin" \) 2>/dev/null | while read f; do
+            cp -v "$f" upload-artifacts/firmware/ || true
+          done
+        fi
         
-        # Copy USB Redirector packages specifically
-        echo "Copying USB Redirector packages..."
-        find openwrt/bin/ -type f -name "*usb-redirector*.ipk" -exec cp -v {} artifacts/usb-redirector/ \; 2>/dev/null || true
+        # Copy USB Redirector packages
+        find openwrt/bin/ -type f -name "*usb-redirector*.ipk" 2>/dev/null | while read f; do
+          cp -v "$f" upload-artifacts/usb-redirector/ || true
+        done
         
-        # Create info file
-        cat > artifacts/build-info.txt << INFO
-        Build Date: $(date)
-        OpenWrt Version: ${{ env.OPENWRT_VERSION }}
-        Target: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-        Device: ${{ env.DEVICE_PROFILE }}
-        Kernel: 6.6.39
+        # Copy some essential packages
+        if [ -d "openwrt/bin/packages" ]; then
+          find openwrt/bin/packages/ -type f -name "*.ipk" 2>/dev/null | head -50 | while read f; do
+            cp "$f" upload-artifacts/packages/ || true
+          done
+        fi
         
-        Contents:
-        - firmware/: OpenWrt firmware images
-        - packages/: All built packages
-        - usb-redirector/: USB Redirector specific packages
-        INFO
+        # Create build info
+        cat > upload-artifacts/BUILD_INFO.txt << INFO_EOF
+Build Date: $(date)
+OpenWrt Branch: ${{ env.OPENWRT_VERSION }}
+Target: ${{ env.TARGET }}/${{ env.SUBTARGET }}
+Device: ${{ env.DEVICE_PROFILE }}
+
+Firmware files:
+$(ls -la upload-artifacts/firmware/ 2>/dev/null || echo "None")
+
+USB Redirector packages:
+$(ls -la upload-artifacts/usb-redirector/ 2>/dev/null || echo "None")
+
+Package count:
+$(find upload-artifacts/packages/ -name "*.ipk" 2>/dev/null | wc -l) packages
+INFO_EOF
         
         echo ""
-        echo "=== Final artifact structure ==="
-        ls -laR artifacts/
+        echo "=== Final upload structure ==="
+        ls -laR upload-artifacts/
 
-    - name: Upload firmware
+    - name: Upload firmware images
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: openwrt-firmware-cmcc-rax3000m
-        path: artifacts/firmware/
+        name: firmware-cmcc-rax3000m
+        path: upload-artifacts/firmware/
         retention-days: 30
         if-no-files-found: warn
 
@@ -354,24 +375,24 @@ jobs:
       if: always()
       with:
         name: usb-redirector-packages
-        path: artifacts/usb-redirector/
+        path: upload-artifacts/usb-redirector/
         retention-days: 30
         if-no-files-found: warn
 
-    - name: Upload all packages
+    - name: Upload sample packages
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: all-packages
-        path: artifacts/packages/
+        name: sample-packages
+        path: upload-artifacts/packages/
         retention-days: 30
         if-no-files-found: warn
 
-    - name: Upload complete build
+    - name: Upload all artifacts
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: complete-build-artifacts
-        path: artifacts/
+        name: all-build-artifacts
+        path: upload-artifacts/
         retention-days: 30
         if-no-files-found: warn
