@@ -188,71 +188,71 @@ jobs:
         # Create patches directory
         mkdir -p patches
         
-        # Create the patch file
-        cat > patches/001-kernel-6.6-compat.patch << 'EOF'
---- a/src/tusbd/cdev.c
-+++ b/src/tusbd/cdev.c
-@@ -9,6 +9,7 @@
- 
- #include <linux/device.h>
- #include <linux/mutex.h>
-+#include <linux/version.h>
- #include <linux/cdev.h>
- #include "usbd.h"
- #include "cdev.h"
-@@ -17,6 +18,10 @@
- 
- #include "public_devices.h"
- 
-+/* Forward declarations */
-+static int lIllIllIl(struct IIIlll*lllll,int llIllI);
-+static void lIlllllll(struct IIIlll*lllll,int llIllI);
-+
- static struct class*lIIIlII;static DEFINE_MUTEX(lIIIlIl);static int lIIIllI;struct 
- lIlIllI{int lIIlIlI;dev_t IIIIll;struct cdev llIlII;struct IIIlll lllll;};static 
- struct lIlIllI lllIlI[(0x0000000F+0x00000FF1+0x00000001-0x00001000)];static int 
-@@ -40,7 +45,11 @@
- );
- do{
- mutex_init(&lIIIlIl);
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
-+lIIIlII=class_create(IIIllII);
-+#else
- lIIIlII=class_create(THIS_MODULE,IIIllII);
-+#endif
- if(lIIIlII==
- 
- NULL||IS_ERR(lIIIlII)){lIlIlI(
-@@ -49,7 +58,11 @@
- ,lIIIlII);return PTR_ERR(lIIIlII);
- }
- 
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
-+lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;
-+#else
- lIIIlII->dev_uevent=lIIllIII,
-+#endif
- 
- 0;if(IIIlllIl()){if(lIIIlII){
- class_destroy(lIIIlII),lIIIlII=
-@@ -119,7 +132,7 @@
- 
- 0;return(0x00000000+0x00000000+0x00000000-0x00000000);
- }
--int lIllIllIl(struct IIIlll*lllll,int llIllI){
-+static int lIllIllIl(struct IIIlll*lllll,int llIllI){
- struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];if(!lIlllI->lIIlIlI){int IIIllI;
- IIIllI=alloc_chrdev_region(&lIlllI->IIIIll,
- (0x00000000+0x00000000+0x00000000-0x00000000),
-@@ -156,7 +169,7 @@
- (0x00000000+0x00000000+0x00000000-0x00000000);
- }
- 
--void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
-+static void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
- struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];lIlllI->lIIlIlI=(0x00000000+0x00000000+0x00000000-0x00000000);device_unregister(lllll->dev);
- lllll->dev=
-EOF
+        # Create the patch file with proper EOF delimiter
+        cat > patches/001-kernel-6.6-compat.patch << 'PATCH_EOF'
+        --- a/src/tusbd/cdev.c
+        +++ b/src/tusbd/cdev.c
+        @@ -9,6 +9,7 @@
+         
+         #include <linux/device.h>
+         #include <linux/mutex.h>
+        +#include <linux/version.h>
+         #include <linux/cdev.h>
+         #include "usbd.h"
+         #include "cdev.h"
+        @@ -17,6 +18,10 @@
+         
+         #include "public_devices.h"
+         
+        +/* Forward declarations */
+        +static int lIllIllIl(struct IIIlll*lllll,int llIllI);
+        +static void lIlllllll(struct IIIlll*lllll,int llIllI);
+        +
+         static struct class*lIIIlII;static DEFINE_MUTEX(lIIIlIl);static int lIIIllI;struct 
+         lIlIllI{int lIIlIlI;dev_t IIIIll;struct cdev llIlII;struct IIIlll lllll;};static 
+         struct lIlIllI lllIlI[(0x0000000F+0x00000FF1+0x00000001-0x00001000)];static int 
+        @@ -40,7 +45,11 @@
+         );
+         do{
+         mutex_init(&lIIIlIl);
+        +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
+        +lIIIlII=class_create(IIIllII);
+        +#else
+         lIIIlII=class_create(THIS_MODULE,IIIllII);
+        +#endif
+         if(lIIIlII==
+         
+         NULL||IS_ERR(lIIIlII)){lIlIlI(
+        @@ -49,7 +58,11 @@
+         ,lIIIlII);return PTR_ERR(lIIIlII);
+         }
+         
+        +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
+        +lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII;
+        +#else
+         lIIIlII->dev_uevent=lIIllIII,
+        +#endif
+         
+         0;if(IIIlllIl()){if(lIIIlII){
+         class_destroy(lIIIlII),lIIIlII=
+        @@ -119,7 +132,7 @@
+         
+         0;return(0x00000000+0x00000000+0x00000000-0x00000000);
+         }
+        -int lIllIllIl(struct IIIlll*lllll,int llIllI){
+        +static int lIllIllIl(struct IIIlll*lllll,int llIllI){
+         struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];if(!lIlllI->lIIlIlI){int IIIllI;
+         IIIllI=alloc_chrdev_region(&lIlllI->IIIIll,
+         (0x00000000+0x00000000+0x00000000-0x00000000),
+        @@ -156,7 +169,7 @@
+         (0x00000000+0x00000000+0x00000000-0x00000000);
+         }
+         
+        -void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
+        +static void lIlllllll(struct IIIlll*lllll,int llIllI){if(lllll->dev){
+         struct lIlIllI*lIlllI=&lllIlI[lllll->llllI];lIlllI->lIIlIlI=(0x00000000+0x00000000+0x00000000-0x00000000);device_unregister(lllll->dev);
+         lllll->dev=
+        PATCH_EOF
         
         echo "Kernel 6.6 compatibility patch created"
         ls -la patches/
@@ -275,122 +275,103 @@ EOF
         # Build packages (patches will be applied automatically)
         echo "Building with kernel 6.6 compatibility patches..."
         make package/usb-redirector-server/compile V=s || {
-          echo "Build failed, trying with workarounds..."
-          
-          # Try to build just userspace with library bypass
-          make package/usb-redirector-server/clean V=s || true
-          
-          # Remove kernel module dependency temporarily
-          sed -i 's/+kmod-usb-redirector-server//' package/usb-redirector-server/Makefile
-          
-          # Bypass library checks
-          cp scripts/ipkg-build scripts/ipkg-build.backup
-          
-          cat > scripts/ipkg-build.new << 'BYPASS_EOF'
-#!/bin/bash
-set -e
-
-pkg_dir=""
-dest_dir=""
-
-for arg in "$@"; do
-  if [ -d "$arg" ]; then
-    if [ -z "$pkg_dir" ]; then
-      pkg_dir="$arg"
-    else
-      dest_dir="$arg"
-    fi
-  fi
-done
-
-[ -z "$dest_dir" ] && dest_dir="."
-
-if [ -f "$pkg_dir/CONTROL/control" ]; then
-  pkg_name=$(grep "^Package:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
-  
-  if [ "$pkg_name" = "usb-redirector-server" ]; then
-    echo "Building $pkg_name with library check bypass..."
-    
-    sed -i '/libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$pkg_dir/CONTROL/control"
-    
-    version=$(grep "^Version:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
-    arch=$(grep "^Architecture:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
-    
-    pkg_file="$dest_dir/${pkg_name}_${version}_${arch}.ipk"
-    
-    cd "$pkg_dir"
-    tar -czf /tmp/control.tar.gz -C CONTROL .
-    tar -czf /tmp/data.tar.gz --exclude=CONTROL .
-    echo "2.0" > /tmp/debian-binary
-    
-    ar -cr "$pkg_file" /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz
-    rm -f /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz
-    
-    echo "Created $pkg_file"
-    exit 0
-  fi
-fi
-
-exec scripts/ipkg-build.backup "$@"
-BYPASS_EOF
-          
-          chmod +x scripts/ipkg-build.new
-          mv scripts/ipkg-build scripts/ipkg-build.old 2>/dev/null || true
-          mv scripts/ipkg-build.new scripts/ipkg-build
-          
-          # Retry build
-          make package/usb-redirector-server/compile V=s || echo "Build attempt completed"
-          
-          # Restore
-          mv scripts/ipkg-build.backup scripts/ipkg-build 2>/dev/null || true
+          echo "Build failed, showing error details..."
+          tail -100 logs/package/usb-redirector-server/compile.txt 2>/dev/null || true
         }
 
-    - name: Check build results
+    - name: List all built files
       if: always()
       run: |
-        cd openwrt
+        echo "=== Listing all firmware files ==="
+        find openwrt/bin/targets/ -type f -name "*.bin" -o -name "*.itb" -o -name "*.img" | while read f; do
+          echo "Found firmware: $f"
+          ls -lh "$f"
+        done
         
-        echo "=== Checking build results ==="
+        echo ""
+        echo "=== Listing all IPK packages ==="
+        find openwrt/bin/ -type f -name "*.ipk" | while read f; do
+          echo "Found package: $f"
+          ls -lh "$f"
+        done
         
-        # Count packages
-        KMOD_COUNT=$(find bin/ -name "kmod-usb-redirector-server*.ipk" 2>/dev/null | wc -l)
-        USER_COUNT=$(find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" 2>/dev/null | wc -l)
-        
-        echo "Kernel module packages: $KMOD_COUNT"
-        echo "Userspace packages: $USER_COUNT"
-        
-        if [ "$KMOD_COUNT" -gt 0 ]; then
-          echo "SUCCESS: Kernel module built!"
-          find bin/ -name "kmod-usb-redirector-server*.ipk" -exec ls -lh {} \;
-        fi
-        
-        if [ "$USER_COUNT" -gt 0 ]; then
-          echo "SUCCESS: Userspace package built!"
-          find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" -exec ls -lh {} \;
-        fi
+        echo ""
+        echo "=== USB Redirector packages ==="
+        find openwrt/bin/ -type f -name "*usb-redirector*.ipk" | while read f; do
+          echo "USB Redirector: $f"
+          ls -lh "$f"
+        done
 
     - name: Organize artifacts
       if: always()
       run: |
+        echo "=== Organizing artifacts ==="
         mkdir -p artifacts/firmware
         mkdir -p artifacts/packages
+        mkdir -p artifacts/usb-redirector
         
-        # Copy firmware
-        find openwrt/bin/targets/ -name "*.bin" -o -name "*.itb" | while read f; do
-          cp -v "$f" artifacts/firmware/ 2>/dev/null || true
-        done
+        # Copy all firmware files
+        echo "Copying firmware files..."
+        find openwrt/bin/targets/ -type f \( -name "*.bin" -o -name "*.itb" -o -name "*.img" \) -exec cp -v {} artifacts/firmware/ \; 2>/dev/null || true
         
-        # Copy USB Redirector packages
-        find openwrt/bin/ -name "*usb-redirector*.ipk" | while read f; do
-          cp -v "$f" artifacts/packages/ 2>/dev/null || true
-        done
+        # Copy all packages
+        echo "Copying package files..."
+        find openwrt/bin/packages/ -type f -name "*.ipk" -exec cp -v {} artifacts/packages/ \; 2>/dev/null || true
         
-        ls -la artifacts/
+        # Copy USB Redirector packages specifically
+        echo "Copying USB Redirector packages..."
+        find openwrt/bin/ -type f -name "*usb-redirector*.ipk" -exec cp -v {} artifacts/usb-redirector/ \; 2>/dev/null || true
+        
+        # Create info file
+        cat > artifacts/build-info.txt << INFO
+        Build Date: $(date)
+        OpenWrt Version: ${{ env.OPENWRT_VERSION }}
+        Target: ${{ env.TARGET }}/${{ env.SUBTARGET }}
+        Device: ${{ env.DEVICE_PROFILE }}
+        Kernel: 6.6.39
+        
+        Contents:
+        - firmware/: OpenWrt firmware images
+        - packages/: All built packages
+        - usb-redirector/: USB Redirector specific packages
+        INFO
+        
+        echo ""
+        echo "=== Final artifact structure ==="
+        ls -laR artifacts/
 
-    - name: Upload artifacts
+    - name: Upload firmware
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: openwrt-24.10-kernel-6.6
+        name: openwrt-firmware-cmcc-rax3000m
+        path: artifacts/firmware/
+        retention-days: 30
+        if-no-files-found: warn
+
+    - name: Upload USB Redirector packages
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: usb-redirector-packages
+        path: artifacts/usb-redirector/
+        retention-days: 30
+        if-no-files-found: warn
+
+    - name: Upload all packages
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: all-packages
+        path: artifacts/packages/
+        retention-days: 30
+        if-no-files-found: warn
+
+    - name: Upload complete build
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: complete-build-artifacts
         path: artifacts/
         retention-days: 30
+        if-no-files-found: warn
