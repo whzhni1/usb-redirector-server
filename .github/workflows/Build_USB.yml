@@ -186,41 +186,24 @@ jobs:
         echo "Packages built:"
         find bin/packages/ -name "*.ipk" | wc -l
 
-    - name: Copy USB Redirector package to ImmortalWrt
-      run: |
-        echo "=== Now adding USB Redirector Server package ==="
-        
-        # Copy package to ImmortalWrt
-        cp -r usb-redirector-server ImmortalWrt/package/
-        
-        # Fix Makefile tabs
-        sed -i 's/^[ ]\+\([$(]\)/\t\1/g' ImmortalWrt/package/usb-redirector-server/Makefile
-        
-        echo "Package copied successfully"
-
     - name: Build USB Redirector packages separately
       run: |
         cd ImmortalWrt
         
         echo "=== Building USB Redirector packages separately ==="
         
-        # Create kernel 6.6 compatibility patch
-        echo "=== Creating kernel 6.6 compatibility patch ==="
+        # First, apply kernel 6.6 compatibility fixes
+        echo "=== Applying kernel 6.6 compatibility fixes ==="
         
-        # Check if source exists in package directory
         if [ -d "package/usb-redirector-server/src/tusbd" ]; then
-          echo "Found source in package directory, applying kernel 6.6 fixes..."
+          echo "Found source in package directory, applying kernel fixes..."
           
           # Backup original
           cp package/usb-redirector-server/src/tusbd/cdev.c package/usb-redirector-server/src/tusbd/cdev.c.bak 2>/dev/null || true
           
-          # Apply fixes using sed
+          # Apply fixes
           sed -i '/#include "usbd.h"/a #include <linux/version.h>' package/usb-redirector-server/src/tusbd/cdev.c
-          
-          # Fix class_create - for kernel 6.4+ just remove THIS_MODULE parameter
           sed -i 's/class_create(THIS_MODULE,IIIllII)/class_create(IIIllII)/' package/usb-redirector-server/src/tusbd/cdev.c
-          
-          # Fix dev_uevent - add proper type cast
           sed -i 's/lIIIlII->dev_uevent=lIIllIII/lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII/' package/usb-redirector-server/src/tusbd/cdev.c
           
           echo "Kernel compatibility fixes applied"
@@ -236,96 +219,70 @@ jobs:
         # Clean any previous attempts
         make package/usb-redirector-server/clean V=s || true
         
-        # Create a wrapper script to bypass library dependency checks
-        echo "=== Creating dependency bypass wrapper ==="
+        # Create a custom ipkg-build wrapper ONLY for usb-redirector
+        echo "=== Creating custom build wrapper for USB Redirector ==="
         
-        # Backup original ipkg-build
-        cp scripts/ipkg-build scripts/ipkg-build.orig 2>/dev/null || true
+        # Save original ipkg-build
+        cp scripts/ipkg-build scripts/ipkg-build.backup
         
-        # Create modified ipkg-build that bypasses library checks for usb-redirector
-        cat > scripts/ipkg-build-wrapper << 'WRAPPER_SCRIPT'
+        # Create a wrapper that handles usb-redirector specially
+        cat > scripts/ipkg-build << 'IPKG_SCRIPT'
         #!/bin/bash
+        set -e
         
-        # Get the package name from control file if it exists
+        # Get the real script path
+        SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+        ORIG_SCRIPT="$SCRIPT_DIR/ipkg-build.backup"
+        
+        # Check if this is usb-redirector-server
+        PKG_DIR=""
         PKG_NAME=""
+        
         for arg in "$@"; do
           if [ -d "$arg" ] && [ -f "$arg/CONTROL/control" ]; then
-            PKG_NAME=$(grep "^Package:" "$arg/CONTROL/control" | cut -d' ' -f2)
+            PKG_DIR="$arg"
+            PKG_NAME=$(grep "^Package:" "$arg/CONTROL/control" 2>/dev/null | cut -d' ' -f2)
             break
           fi
         done
         
-        # If it's usb-redirector-server, bypass library checks
+        # Special handling for usb-redirector-server
         if [ "$PKG_NAME" = "usb-redirector-server" ]; then
-          echo "Building usb-redirector-server with library dependency bypass..."
+          echo "Special handling for usb-redirector-server package..."
           
-          # Call original ipkg-build with environment variable to skip checks
-          IPKG_NO_SCRIPT=1 exec scripts/ipkg-build.orig "$@"
-        else
-          # For other packages, use normal build
-          exec scripts/ipkg-build.orig "$@"
-        fi
-        WRAPPER_SCRIPT
-        
-        chmod +x scripts/ipkg-build-wrapper
-        
-        # Modify the original ipkg-build to skip library checks for usb-redirector
-        cat > scripts/ipkg-build.new << 'IPKG_BUILD'
-        #!/bin/bash
-        set -e
-        
-        # Function to check if this is usb-redirector-server
-        is_usb_redirector() {
-          local pkg_dir="$1"
-          if [ -f "$pkg_dir/CONTROL/control" ]; then
-            grep -q "^Package: usb-redirector-server" "$pkg_dir/CONTROL/control" && return 0
-          fi
-          return 1
-        }
-        
-        # Find package directory
-        pkg_dir=""
-        for arg in "$@"; do
-          if [ -d "$arg" ] && [ ! "$arg" = "." ]; then
-            if [ -z "$pkg_dir" ] || [ -f "$arg/CONTROL/control" ]; then
-              pkg_dir="$arg"
+          # Remove glibc dependencies from control file
+          if [ -f "$PKG_DIR/CONTROL/control" ]; then
+            # Create a temporary control file without glibc deps
+            grep -v "libc\.so\|libm\.so\|libpthread\.so\|librt\.so" "$PKG_DIR/CONTROL/control" > "$PKG_DIR/CONTROL/control.tmp"
+            mv "$PKG_DIR/CONTROL/control.tmp" "$PKG_DIR/CONTROL/control"
+            
+            # Ensure Depends line is correct
+            if ! grep -q "^Depends:" "$PKG_DIR/CONTROL/control"; then
+              echo "Depends: kmod-usb-redirector-server" >> "$PKG_DIR/CONTROL/control"
             fi
           fi
-        done
-        
-        # If it's usb-redirector-server, remove library dependencies from control file
-        if is_usb_redirector "$pkg_dir"; then
-          echo "Removing glibc dependencies for usb-redirector-server..."
-          if [ -f "$pkg_dir/CONTROL/control" ]; then
-            # Remove glibc library dependencies
-            sed -i '/^Depends:.*libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$pkg_dir/CONTROL/control"
-            
-            # Clean up Depends line
-            sed -i 's/^Depends:.*$/Depends: kmod-usb-redirector-server/' "$pkg_dir/CONTROL/control"
-          fi
         fi
         
-        # Call the original ipkg-build
-        exec scripts/ipkg-build.orig "$@"
-        IPKG_BUILD
+        # Call the original script
+        exec "$ORIG_SCRIPT" "$@"
+        IPKG_SCRIPT
         
-        chmod +x scripts/ipkg-build.new
-        mv scripts/ipkg-build scripts/ipkg-build.orig 2>/dev/null || true
-        mv scripts/ipkg-build.new scripts/ipkg-build
+        chmod +x scripts/ipkg-build
         
         # Try to build USB Redirector packages
-        echo "Building packages..."
+        echo "Building USB Redirector packages..."
         make package/usb-redirector-server/compile V=s || {
-          echo "Build failed, applying additional fixes..."
+          echo "First attempt failed, trying with build directory fixes..."
           
-          # Find the build directory
-          BUILD_DIR="build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/usb-redirector-server-3.10"
+          # Restore original ipkg-build first
+          mv scripts/ipkg-build.backup scripts/ipkg-build
           
           # Apply kernel fixes to build directory if needed
+          BUILD_DIR="build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/usb-redirector-server-3.10"
+          
           if [ -d "$BUILD_DIR/src/tusbd" ] && [ -f "$BUILD_DIR/src/tusbd/cdev.c" ]; then
             echo "Applying kernel fixes to build directory..."
             
-            # Only apply if not already fixed
             if ! grep -q "linux/version.h" "$BUILD_DIR/src/tusbd/cdev.c"; then
               sed -i '/#include "usbd.h"/a #include <linux/version.h>' "$BUILD_DIR/src/tusbd/cdev.c"
               sed -i 's/class_create(THIS_MODULE,IIIllII)/class_create(IIIllII)/' "$BUILD_DIR/src/tusbd/cdev.c"
@@ -333,26 +290,29 @@ jobs:
             fi
           fi
           
-          # Retry with modified Makefile to skip dependency checks
-          echo "Modifying package Makefile to skip dependency checks..."
+          # Alternative approach: Modify the Makefile to remove library dependencies
+          echo "Modifying Makefile to remove glibc dependencies..."
           
           if [ -f "package/usb-redirector-server/Makefile" ]; then
-            # Add PKG_CHECK_FORMAT_SECURITY:=0 and other flags
-            sed -i '/include.*rules.mk/a PKG_CHECK_FORMAT_SECURITY:=0\nPKG_BUILD_DEPENDS:=\nPKG_FIXUP:=autoreconf' package/usb-redirector-server/Makefile
+            # Create a modified Makefile
+            cp package/usb-redirector-server/Makefile package/usb-redirector-server/Makefile.orig
             
-            # Modify the DEPENDS line to remove problematic dependencies
-            sed -i 's/DEPENDS:=.*$/DEPENDS:=+kmod-usb-redirector-server/' package/usb-redirector-server/Makefile
+            # Remove the problematic dependencies
+            sed -i 's/DEPENDS:=+kmod-usb-redirector-server +librt +libstdcpp +libpthread/DEPENDS:=+kmod-usb-redirector-server/' package/usb-redirector-server/Makefile
+            
+            # Try building with modified Makefile
+            make package/usb-redirector-server/compile V=s || {
+              echo "Still failing, trying manual package creation..."
+              
+              # Restore original Makefile
+              mv package/usb-redirector-server/Makefile.orig package/usb-redirector-server/Makefile
+            }
           fi
-          
-          # Final build attempt
-          make package/usb-redirector-server/compile V=s || {
-            echo "Build still failing, will create packages manually..."
-          }
         }
         
-        # Restore original ipkg-build
-        if [ -f "scripts/ipkg-build.orig" ]; then
-          mv scripts/ipkg-build.orig scripts/ipkg-build
+        # Always restore original ipkg-build at the end
+        if [ -f "scripts/ipkg-build.backup" ]; then
+          mv scripts/ipkg-build.backup scripts/ipkg-build
         fi
         
         echo "=== USB Redirector build attempt completed ==="
