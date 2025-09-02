@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  ImmortalWrt_VERSION: v23.05.6
+  ImmortalWrt_VERSION: v24.10.2
   DEVICE_PROFILE: cmcc_rax3000m
   TARGET: mediatek
   SUBTARGET: filogic
