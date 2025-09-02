@@ -204,6 +204,75 @@ jobs:
         
         echo "=== Building USB Redirector packages separately ==="
         
+        # Create kernel 6.6 compatibility patch
+        echo "=== Creating kernel 6.6 compatibility patch ==="
+        
+        mkdir -p package/usb-redirector-server/patches
+        
+        # Create patch file for kernel 6.4+ compatibility
+        cat > package/usb-redirector-server/patches/001-kernel-6.6-compat.patch << 'EOF'
+        --- a/src/tusbd/cdev.c
+        +++ b/src/tusbd/cdev.c
+        @@ -10,6 +10,7 @@
+          */
+         
+         #include "usbd.h"
+        +#include <linux/version.h>
+         #include <linux/ctype.h> 
+         #define IIIIlIlI (0x2264+1444-0x2708)
+         static struct cdev*IllIIll=NULL;static dev_t llIlIll=MKDEV((0xcd5+4386-0x1df7),
+        @@ -38,7 +39,11 @@
+         .mmap=lIIIllllI,.open=IIlIlllll,.release=IIlllIlll,};int lIIlllllI(void){int 
+         IlIlI=(0x679+8196-0x267d);lIlll(
+         "\x69\x6e\x69\x74\x5f\x63\x64\x65\x76\x5f\x6d\x6f\x64\x75\x6c\x65\x3a\x20\x2b\x2b" "\n"
+        -);do{mutex_init(&lIIIlIl);lIIIlII=class_create(THIS_MODULE,IIIllII);if(lIIIlII==
+        +);do{mutex_init(&lIIIlIl);lIIIlII=
+        +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
+        +class_create(IIIllII);
+        +#else
+        +class_create(THIS_MODULE,IIIllII);
+        +#endif
+        +if(lIIIlII==
+         NULL){lIlll(
+         "\x69\x6e\x69\x74\x5f\x63\x64\x65\x76\x5f\x6d\x6f\x64\x75\x6c\x65\x3a\x20\x63\x6c\x61\x73\x73\x5f\x63\x72\x65\x61\x74\x65\x20\x66\x61\x69\x6c\x65\x64\x2e" "\n"
+         );IlIlI=-ENOMEM;break;}
+        @@ -48,7 +53,11 @@
+         #elif KERNEL_LT_EQ((0xd63+1026-0x1163),(0x332+239-0x41b),(0x12b7+4997-0x2623)) 
+         lIIIlII->uevent=lIIllIII,lIIIlII->release=lIllIlIl,
+         #else 
+        +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
+        +lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII,
+        +#else
+         lIIIlII->dev_uevent=lIIllIII,
+         #endif
+        +#endif
+         IlIlI=alloc_chrdev_region(&llIlIll,(0x1393+4504-0x252b),IIIIlIlI,IIIllII);if(
+         IlIlI!=(0x15e9+1624-0x1c41)){lIlll(
+        EOF
+        
+        # Also create a simpler sed-based fix as backup
+        echo "=== Applying compatibility fixes ==="
+        
+        # Check if source exists in package directory
+        if [ -d "package/usb-redirector-server/src/tusbd" ]; then
+          echo "Found source in package directory, applying fixes..."
+          
+          # Backup original
+          cp package/usb-redirector-server/src/tusbd/cdev.c package/usb-redirector-server/src/tusbd/cdev.c.bak
+          
+          # Apply fixes using sed (simpler approach for obfuscated code)
+          # Add version header after usbd.h include
+          sed -i '/#include "usbd.h"/a #include <linux/version.h>' package/usb-redirector-server/src/tusbd/cdev.c
+          
+          # Fix class_create - wrap with version check
+          sed -i 's/lIIIlII=class_create(THIS_MODULE,IIIllII);/lIIIlII=\n#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)\nclass_create(IIIllII);\n#else\nclass_create(THIS_MODULE,IIIllII);\n#endif/' package/usb-redirector-server/src/tusbd/cdev.c
+          
+          # Fix dev_uevent - add type cast for new kernels
+          sed -i 's/lIIIlII->dev_uevent=lIIllIII,/\n#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)\nlIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII,\n#else\nlIIIlII->dev_uevent=lIIllIII,\n#endif/' package/usb-redirector-server/src/tusbd/cdev.c
+          
+          echo "Fixes applied to package source"
+        fi
+        
         # Update config to include USB Redirector as modules
         echo "CONFIG_PACKAGE_usb-redirector-server=m" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-redirector-server=m" >> .config
@@ -217,78 +286,48 @@ jobs:
         # Try to build USB Redirector packages
         echo "Building kernel module..."
         make package/usb-redirector-server/compile V=s || {
-          echo "Normal build failed, trying with workarounds..."
+          echo "Build failed, applying fixes to build directory..."
           
-          # Patch ipkg-build just for this package
-          cp scripts/ipkg-build scripts/ipkg-build.backup
+          # Find the build directory
+          BUILD_DIR="build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/usb-redirector-server-3.10"
           
-          # Create a simple bypass for library checks
-          cat > scripts/ipkg-build.new << 'BYPASS_SCRIPT'
-        #!/bin/bash
-        set -e
-        
-        # Simple ipkg-build that bypasses library checks for usb-redirector
-        pkg_dir=""
-        dest_dir=""
-        
-        # Find directories in arguments
-        for arg in "$@"; do
-          if [ -d "$arg" ]; then
-            if [ -z "$pkg_dir" ]; then
-              pkg_dir="$arg"
-            else
-              dest_dir="$arg"
+          if [ -d "$BUILD_DIR/src/tusbd" ]; then
+            echo "Applying fixes to build directory: $BUILD_DIR"
+            
+            # Apply the same fixes to build directory
+            if [ ! -f "$BUILD_DIR/src/tusbd/cdev.c.bak" ]; then
+              cp "$BUILD_DIR/src/tusbd/cdev.c" "$BUILD_DIR/src/tusbd/cdev.c.bak"
             fi
+            
+            # Restore from backup first
+            cp "$BUILD_DIR/src/tusbd/cdev.c.bak" "$BUILD_DIR/src/tusbd/cdev.c"
+            
+            # Apply fixes
+            sed -i '/#include "usbd.h"/a #include <linux/version.h>' "$BUILD_DIR/src/tusbd/cdev.c"
+            
+            # Fix class_create with proper multiline handling
+            perl -i -pe 's/lIIIlII=class_createKATEX_INLINE_OPENTHIS_MODULE,IIIllIIKATEX_INLINE_CLOSE;/lIIIlII=\n#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)\nclass_create(IIIllII);\n#else\nclass_create(THIS_MODULE,IIIllII);\n#endif/' "$BUILD_DIR/src/tusbd/cdev.c"
+            
+            # Fix dev_uevent
+            perl -i -pe 's/lIIIlII->dev_uevent=lIIllIII,/\n#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)\nlIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII,\n#else\nlIIIlII->dev_uevent=lIIllIII,\n#endif/' "$BUILD_DIR/src/tusbd/cdev.c"
+            
+            echo "Retrying build after fixes..."
+            make package/usb-redirector-server/compile V=s || {
+              echo "Build still failing, trying alternative approach..."
+              
+              # Alternative: Create a simpler fix without version checks
+              cp "$BUILD_DIR/src/tusbd/cdev.c.bak" "$BUILD_DIR/src/tusbd/cdev.c"
+              
+              # Just make the changes for kernel 6.6 directly
+              sed -i 's/class_create(THIS_MODULE,IIIllII)/class_create(IIIllII)/' "$BUILD_DIR/src/tusbd/cdev.c"
+              sed -i 's/lIIIlII->dev_uevent=lIIllIII/lIIIlII->dev_uevent=(int (*)(const struct device *, struct kobj_uevent_env *))lIIllIII/' "$BUILD_DIR/src/tusbd/cdev.c"
+              
+              # Final build attempt
+              make package/usb-redirector-server/compile V=s || echo "Kernel module build failed"
+            }
+          else
+            echo "Build directory not found: $BUILD_DIR"
           fi
-        done
-        
-        [ -z "$dest_dir" ] && dest_dir="."
-        
-        # Check if it's usb-redirector-server
-        if [ -f "$pkg_dir/CONTROL/control" ]; then
-          pkg_name=$(grep "^Package:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
-          
-          if [ "$pkg_name" = "usb-redirector-server" ]; then
-            echo "Building $pkg_name with library check bypass..."
-            
-            # Clean control file
-            sed -i '/libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$pkg_dir/CONTROL/control"
-            
-            # Get package info
-            version=$(grep "^Version:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
-            arch=$(grep "^Architecture:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
-            
-            # Build IPK
-            pkg_file="$dest_dir/${pkg_name}_${version}_${arch}.ipk"
-            
-            cd "$pkg_dir"
-            tar -czf /tmp/control.tar.gz -C CONTROL .
-            tar -czf /tmp/data.tar.gz --exclude=CONTROL .
-            echo "2.0" > /tmp/debian-binary
-            
-            ar -cr "$pkg_file" /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz
-            rm -f /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz
-            
-            echo "Created $pkg_file"
-            exit 0
-          fi
-        fi
-        
-        # For other packages, use the backup
-        exec scripts/ipkg-build.backup "$@"
-        BYPASS_SCRIPT
-          
-          chmod +x scripts/ipkg-build.new
-          mv scripts/ipkg-build scripts/ipkg-build.old
-          mv scripts/ipkg-build.new scripts/ipkg-build
-          
-          # Retry build
-          make package/usb-redirector-server/compile V=s || {
-            echo "Still failed, will create manually later"
-          }
-          
-          # Restore original ipkg-build
-          mv scripts/ipkg-build.backup scripts/ipkg-build 2>/dev/null || true
         }
         
         echo "=== USB Redirector build attempt completed ==="
