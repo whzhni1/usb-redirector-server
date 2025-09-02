@@ -6,10 +6,15 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      device:
+        description: 'Device Profile'
+        required: false
+        default: 'cmcc_rax3000m'
 
 env:
-  OPENWRT_VERSION: main  # OpenWrt main branch
-  DEVICE_PROFILE: cmcc_rax3000m
+  OPENWRT_VERSION: main
+  DEVICE_PROFILE: ${{ github.event.inputs.device || 'cmcc_rax3000m' }}
   TARGET: mediatek
   SUBTARGET: filogic
 
@@ -81,10 +86,11 @@ jobs:
         cd openwrt
         echo "OpenWrt version: $(git rev-parse HEAD)"
         
-        # Check actual kernel version
+        # Check kernel version
         echo "Checking kernel version..."
         KERNEL_VER=$(ls include/kernel-* 2>/dev/null | sed 's/.*kernel-//' | head -1)
         echo "Kernel version detected: $KERNEL_VER"
+        echo "KERNEL_VERSION=$KERNEL_VER" >> $GITHUB_ENV
 
     - name: Update and install feeds
       run: |
@@ -169,7 +175,7 @@ jobs:
         
         echo "=== Base firmware build completed ==="
 
-    - name: Prepare USB Redirector package
+    - name: Copy USB Redirector package to OpenWrt
       run: |
         echo "=== Preparing USB Redirector Server package ==="
         
@@ -182,9 +188,12 @@ jobs:
         # Create patches directory
         mkdir -p openwrt/package/usb-redirector-server/patches
 
-    - name: Create kernel 6.12 compatibility patch
+    - name: Create kernel compatibility patch
       run: |
-        cat > openwrt/package/usb-redirector-server/patches/001-kernel-6.12-compat.patch << 'PATCH_EOF'
+        cd openwrt/package/usb-redirector-server/patches
+        
+        # Create the patch file using a different approach to avoid here-document issues
+        cat > 001-kernel-6.12-compat.patch << 'PATCH_EOF'
 --- a/src/tusbd/cdev.c
 +++ b/src/tusbd/cdev.c
 @@ -9,6 +9,7 @@
@@ -249,8 +258,8 @@ jobs:
  lllll->dev=
 PATCH_EOF
         
-        echo "Kernel 6.12 compatibility patch created"
-        ls -la openwrt/package/usb-redirector-server/patches/
+        echo "Kernel compatibility patch created"
+        ls -la ../patches/
 
     - name: Build USB Redirector packages
       run: |
@@ -271,11 +280,6 @@ PATCH_EOF
         make package/usb-redirector-server/compile V=s || {
           echo "Build failed, checking logs..."
           find logs -name "*usb-redirector*" -exec cat {} \; 2>/dev/null || true
-          
-          echo "Attempting userspace-only build..."
-          # Remove kernel module from Makefile temporarily
-          sed -i 's/+kmod-usb-redirector-server//' package/usb-redirector-server/Makefile
-          make package/usb-redirector-server/compile V=s || true
         }
 
     - name: Check and list all build outputs
@@ -294,18 +298,6 @@ PATCH_EOF
         fi
         
         echo ""
-        echo "=== All IPK packages ==="
-        if [ -d "openwrt/bin" ]; then
-          find openwrt/bin/ -type f -name "*.ipk" 2>/dev/null | head -20 | while read f; do
-            echo "Package: $(basename $f) - $(ls -lh $f | awk '{print $5}')"
-          done
-          TOTAL_PKGS=$(find openwrt/bin/ -type f -name "*.ipk" 2>/dev/null | wc -l)
-          echo "Total packages found: $TOTAL_PKGS"
-        else
-          echo "No packages found"
-        fi
-        
-        echo ""
         echo "=== USB Redirector packages ==="
         find openwrt/bin/ -type f -name "*usb-redirector*.ipk" 2>/dev/null | while read f; do
           echo "USB Package: $(basename $f) - $(ls -lh $f | awk '{print $5}')"
@@ -319,42 +311,32 @@ PATCH_EOF
         # Create artifact directories
         mkdir -p upload-artifacts/firmware
         mkdir -p upload-artifacts/packages
-        mkdir -p upload-artifacts/usb-redirector
         
         # Copy firmware files
         if [ -d "openwrt/bin/targets" ]; then
-          find openwrt/bin/targets/ -type f \( -name "*cmcc*.bin" -o -name "*cmcc*.itb" -o -name "*sysupgrade*.bin" -o -name "*factory*.bin" \) 2>/dev/null | while read f; do
+          find openwrt/bin/targets/ -type f \( -name "*cmcc*.bin" -o -name "*sysupgrade*.bin" -o -name "*factory*.bin" \) 2>/dev/null | while read f; do
             cp -v "$f" upload-artifacts/firmware/ || true
           done
         fi
         
         # Copy USB Redirector packages
         find openwrt/bin/ -type f -name "*usb-redirector*.ipk" 2>/dev/null | while read f; do
-          cp -v "$f" upload-artifacts/usb-redirector/ || true
+          cp -v "$f" upload-artifacts/packages/ || true
         done
         
-        # Copy some essential packages
-        if [ -d "openwrt/bin/packages" ]; then
-          find openwrt/bin/packages/ -type f -name "*.ipk" 2>/dev/null | head -50 | while read f; do
-            cp "$f" upload-artifacts/packages/ || true
-          done
-        fi
-        
         # Create build info
-        cat > upload-artifacts/BUILD_INFO.txt << INFO_EOF
+        cat > upload-artifacts/BUILD_INFO.txt << 'INFO_EOF'
+Build Information
+=================
 Build Date: $(date)
 OpenWrt Branch: ${{ env.OPENWRT_VERSION }}
 Target: ${{ env.TARGET }}/${{ env.SUBTARGET }}
 Device: ${{ env.DEVICE_PROFILE }}
 
-Firmware files:
-$(ls -la upload-artifacts/firmware/ 2>/dev/null || echo "None")
-
-USB Redirector packages:
-$(ls -la upload-artifacts/usb-redirector/ 2>/dev/null || echo "None")
-
-Package count:
-$(find upload-artifacts/packages/ -name "*.ipk" 2>/dev/null | wc -l) packages
+Contents:
+---------
+Firmware files: $(ls -1 upload-artifacts/firmware/ 2>/dev/null | wc -l) files
+USB Redirector packages: $(ls -1 upload-artifacts/packages/ 2>/dev/null | wc -l) files
 INFO_EOF
         
         echo ""
@@ -365,7 +347,7 @@ INFO_EOF
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: firmware-cmcc-rax3000m
+        name: firmware-${{ env.DEVICE_PROFILE }}
         path: upload-artifacts/firmware/
         retention-days: 30
         if-no-files-found: warn
@@ -375,15 +357,6 @@ INFO_EOF
       if: always()
       with:
         name: usb-redirector-packages
-        path: upload-artifacts/usb-redirector/
-        retention-days: 30
-        if-no-files-found: warn
-
-    - name: Upload sample packages
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: sample-packages
         path: upload-artifacts/packages/
         retention-days: 30
         if-no-files-found: warn
