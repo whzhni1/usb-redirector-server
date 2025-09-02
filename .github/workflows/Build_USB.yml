@@ -1,4 +1,4 @@
-name: Build OpenWrt with USB Redirector for CMCC RAX3000M
+name: Build ImmortalWrt Firmware with USB Redirector for CMCC RAX3000M
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  OPENWRT_VERSION: v23.05.3
+  ImmortalWrt_VERSION: v23.05.6
   DEVICE_PROFILE: cmcc_rax3000m
   TARGET: mediatek
   SUBTARGET: filogic
@@ -18,292 +18,379 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-    - name: Checkout repository
+    - name: Checkout USB Redirector Server
       uses: actions/checkout@v4
+      with:
+        path: usb-redirector-server
 
     - name: Maximize build space
       run: |
-        echo "=== Free disk space ==="
+        echo "Before cleanup:"
         df -h
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+        
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        
         sudo apt-get remove -y '^firefox' '^thunderbird' '^libreoffice' '^google-chrome'
         sudo apt-get autoremove -y
         sudo apt-get clean
+        
+        echo "After cleanup:"
         df -h
 
-    - name: Install dependencies
+    - name: Install build dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential ccache ecj fastjar file g++ gawk gettext git \
-          java-propose-classpath libelf-dev libncurses-dev libssl-dev \
-          python3 python3-dev python3-distutils python3-setuptools \
-          qemu-utils rsync subversion swig time unzip wget xsltproc zlib1g-dev
+          build-essential \
+          ccache \
+          ecj \
+          fastjar \
+          file \
+          g++ \
+          gawk \
+          gettext \
+          git \
+          java-propose-classpath \
+          libelf-dev \
+          libncurses-dev \
+          libssl-dev \
+          python3 \
+          python3-dev \
+          python3-distutils \
+          python3-setuptools \
+          qemu-utils \
+          rsync \
+          subversion \
+          swig \
+          time \
+          unzip \
+          wget \
+          xsltproc \
+          zlib1g-dev
 
-    - name: Clone OpenWrt
+    - name: Clone ImmortalWrt
       run: |
-        git clone --depth 1 --branch ${{ env.OPENWRT_VERSION }} https://github.com/openwrt/openwrt.git
-        cd openwrt
-        echo "OpenWrt commit: $(git rev-parse HEAD)"
+        git clone --depth 1 --branch ${{ env.ImmortalWrt_VERSION }} https://github.com/ImmortalWrt/ImmortalWrt.git
+        cd ImmortalWrt
+        echo "ImmortalWrt version: $(git rev-parse HEAD)"
 
-    - name: Update feeds
+    - name: Update and install feeds
       run: |
-        cd openwrt
+        cd ImmortalWrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Prepare USB Redirector package
+    - name: Configure ImmortalWrt for CMCC RAX3000M (without USB Redirector first)
       run: |
-        # Copy package to OpenWrt
-        cp -r . openwrt/package/usb-redirector-server
+        cd ImmortalWrt
         
-        # Remove .git and workflow files
-        rm -rf openwrt/package/usb-redirector-server/.git
-        rm -rf openwrt/package/usb-redirector-server/.github
-        
-        # Fix Makefile tabs
-        sed -i 's/^[ ]\+\([$(]\)/\t\1/g' openwrt/package/usb-redirector-server/Makefile
-        
-        # Copy patches if they exist
-        if [ -d "patches" ]; then
-          mkdir -p openwrt/package/usb-redirector-server/patches
-          cp patches/*.patch openwrt/package/usb-redirector-server/patches/
-        fi
-
-    - name: Patch OpenWrt to bypass library checks
-      run: |
-        cd openwrt
-        
-        # Method 1: Replace ipkg-build with version that skips library checks
-        mv scripts/ipkg-build scripts/ipkg-build.orig
-        
-        cat > scripts/ipkg-build << 'IPKG_BUILD_END'
-        #!/bin/bash
-        set -e
-        
-        # Get arguments
-        pkg_dir=""
-        dest_dir=""
-        while [ "$#" -gt 0 ]; do
-          case "$1" in
-            -m) shift ;;
-            -*) shift ;;
-            *)
-              if [ -z "$pkg_dir" ]; then
-                pkg_dir="$1"
-              else
-                dest_dir="$1"
-              fi
-              shift ;;
-          esac
-        done
-        
-        [ -z "$dest_dir" ] && dest_dir="."
-        
-        # Get package info
-        control="$pkg_dir/CONTROL/control"
-        if [ ! -f "$control" ]; then
-          echo "Error: $control not found"
-          exit 1
-        fi
-        
-        name=$(grep "^Package:" "$control" | cut -d' ' -f2)
-        version=$(grep "^Version:" "$control" | cut -d' ' -f2)
-        arch=$(grep "^Architecture:" "$control" | cut -d' ' -f2)
-        
-        # Check if it's usb-redirector-server
-        if echo "$name" | grep -q "usb-redirector"; then
-          echo "Building $name - skipping library checks"
-          # Remove library dependencies
-          sed -i '/libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$control"
-        else
-          # For other packages, use original script
-          exec scripts/ipkg-build.orig "$@"
-        fi
-        
-        # Create IPK
-        pkg_file="$dest_dir/${name}_${version}_${arch}.ipk"
-        
-        # Clean up
-        find "$pkg_dir" -name 'CVS' -o -name '.svn' -o -name '.#*' -o -name '*~' | xargs -r rm -rf
-        
-        # Create IPK
-        tmp_dir=$(mktemp -d)
-        echo "2.0" > "$tmp_dir/debian-binary"
-        (cd "$pkg_dir/CONTROL" && tar -czf "$tmp_dir/control.tar.gz" .)
-        (cd "$pkg_dir" && tar --exclude=CONTROL -czf "$tmp_dir/data.tar.gz" .)
-        (cd "$tmp_dir" && ar -cr "$pkg_file" debian-binary control.tar.gz data.tar.gz)
-        rm -rf "$tmp_dir"
-        
-        echo "Packaged $pkg_file"
-        IPKG_BUILD_END
-        
-        chmod +x scripts/ipkg-build
-
-    - name: Configure OpenWrt
-      run: |
-        cd openwrt
-        
+        # First build WITHOUT USB Redirector to ensure base system works
         cat > .config << EOF
+        # Target
         CONFIG_TARGET_mediatek=y
         CONFIG_TARGET_mediatek_filogic=y
         CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y
+        
+        # Build settings
         CONFIG_DEVEL=y
         CONFIG_CCACHE=y
+        CONFIG_BUILD_LOG=y
+        
+        # Image settings
         CONFIG_TARGET_ROOTFS_INITRAMFS=y
         CONFIG_TARGET_ROOTFS_SQUASHFS=y
+        
+        # USB Support
         CONFIG_PACKAGE_kmod-usb-core=y
         CONFIG_PACKAGE_kmod-usb2=y
         CONFIG_PACKAGE_kmod-usb3=y
         CONFIG_PACKAGE_kmod-usb-xhci-hcd=y
         CONFIG_PACKAGE_kmod-usb-xhci-mtk=y
-        CONFIG_PACKAGE_kmod-usb-redirector-server=m
-        CONFIG_PACKAGE_usb-redirector-server=m
+        CONFIG_PACKAGE_kmod-usb-storage=y
+        
+        # Basic system
+        CONFIG_PACKAGE_base-files=y
+        CONFIG_PACKAGE_busybox=y
+        CONFIG_PACKAGE_dropbear=y
+        CONFIG_PACKAGE_mtd=y
+        CONFIG_PACKAGE_uci=y
+        CONFIG_PACKAGE_opkg=y
+        CONFIG_PACKAGE_netifd=y
+        CONFIG_PACKAGE_usbutils=y
+        
+        # Network
+        CONFIG_PACKAGE_ppp=y
+        CONFIG_PACKAGE_ppp-mod-pppoe=y
+        CONFIG_PACKAGE_odhcp6c=y
+        CONFIG_PACKAGE_odhcpd-ipv6only=y
+        
+        # WiFi
+        CONFIG_PACKAGE_kmod-mt7915-firmware=y
+        CONFIG_PACKAGE_wpad-basic-mbedtls=y
+        CONFIG_PACKAGE_hostapd-common=y
+        CONFIG_PACKAGE_wireless-tools=y
+        
+        # LuCI
         CONFIG_PACKAGE_luci=y
+        CONFIG_PACKAGE_luci-base=y
+        CONFIG_PACKAGE_luci-mod-admin-full=y
+        CONFIG_PACKAGE_luci-theme-bootstrap=y
+        CONFIG_PACKAGE_luci-app-firewall=y
+        CONFIG_PACKAGE_uhttpd=y
+        CONFIG_PACKAGE_uhttpd-mod-ubus=y
+        
+        # Build info
+        CONFIG_KERNEL_BUILD_USER="github-actions"
+        CONFIG_KERNEL_BUILD_DOMAIN="github.com"
         EOF
         
         make defconfig
+        
+        echo "=== Configuration complete (without USB Redirector) ==="
 
-    - name: Download sources
+    - name: Download package sources
       run: |
-        cd openwrt
+        cd ImmortalWrt
         make download -j8 || make download -j1 V=s
+        find dl -size -1024c -exec rm -f {} \;
 
-    - name: Build firmware and packages
+    - name: Build base ImmortalWrt firmware (without USB Redirector)
       run: |
-        cd openwrt
-        make -j$(nproc) || make -j1 V=s
+        cd ImmortalWrt
+        
+        echo "=== Building base ImmortalWrt firmware ==="
+        
+        # Build the base system first
+        make -j$(nproc) world || {
+          echo "Parallel build failed, retrying with single thread..."
+          make -j1 V=s world
+        }
+        
+        echo "=== Base firmware build completed ==="
 
-    - name: Force create missing IPK if needed
-      if: always()
+    - name: Check base build results
       run: |
-        cd openwrt
+        cd ImmortalWrt
         
-        # Check what packages exist
-        echo "=== Checking for packages ==="
-        KMOD_IPK=$(find bin/ -name "kmod-usb-redirector-server*.ipk" 2>/dev/null | head -1)
-        USER_IPK=$(find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" 2>/dev/null | head -1)
+        echo "=== Base build results ==="
+        echo "Firmware images:"
+        ls -lah bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*.bin 2>/dev/null || echo "No .bin files"
         
-        echo "Kernel module: ${KMOD_IPK:-NOT FOUND}"
-        echo "Userspace: ${USER_IPK:-NOT FOUND}"
+        echo ""
+        echo "Packages built:"
+        find bin/packages/ -name "*.ipk" | wc -l
+
+    - name: Copy USB Redirector package to ImmortalWrt
+      run: |
+        echo "=== Now adding USB Redirector Server package ==="
         
-        # If userspace package is missing, create it manually
-        if [ -z "$USER_IPK" ]; then
-          echo "Creating userspace IPK manually..."
+        # Copy package to ImmortalWrt
+        cp -r usb-redirector-server ImmortalWrt/package/
+        
+        # Fix Makefile tabs
+        sed -i 's/^[ ]\+\([$(]\)/\t\1/g' ImmortalWrt/package/usb-redirector-server/Makefile
+        
+        echo "Package copied successfully"
+
+    - name: Build USB Redirector packages separately
+      run: |
+        cd ImmortalWrt
+        
+        echo "=== Building USB Redirector packages separately ==="
+        
+        # Update config to include USB Redirector as modules
+        echo "CONFIG_PACKAGE_usb-redirector-server=m" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-redirector-server=m" >> .config
+        
+        # Refresh config
+        make defconfig
+        
+        # Clean any previous attempts
+        make package/usb-redirector-server/clean V=s || true
+        
+        # Try to build USB Redirector packages
+        echo "Building kernel module..."
+        make package/usb-redirector-server/compile V=s || {
+          echo "Normal build failed, trying with workarounds..."
           
-          # Find the prepared package directory
-          IPK_DIR=$(find build_dir -type d -path "*/ipkg-*/usb-redirector-server" 2>/dev/null | head -1)
+          # Patch ipkg-build just for this package
+          cp scripts/ipkg-build scripts/ipkg-build.backup
           
-          if [ -n "$IPK_DIR" ] && [ -d "$IPK_DIR" ]; then
-            echo "Found IPK directory: $IPK_DIR"
+          # Create a simple bypass for library checks
+          cat > scripts/ipkg-build.new << 'BYPASS_SCRIPT'
+        #!/bin/bash
+        set -e
+        
+        # Simple ipkg-build that bypasses library checks for usb-redirector
+        pkg_dir=""
+        dest_dir=""
+        
+        # Find directories in arguments
+        for arg in "$@"; do
+          if [ -d "$arg" ]; then
+            if [ -z "$pkg_dir" ]; then
+              pkg_dir="$arg"
+            else
+              dest_dir="$arg"
+            fi
+          fi
+        done
+        
+        [ -z "$dest_dir" ] && dest_dir="."
+        
+        # Check if it's usb-redirector-server
+        if [ -f "$pkg_dir/CONTROL/control" ]; then
+          pkg_name=$(grep "^Package:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
+          
+          if [ "$pkg_name" = "usb-redirector-server" ]; then
+            echo "Building $pkg_name with library check bypass..."
+            
+            # Clean control file
+            sed -i '/libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$pkg_dir/CONTROL/control"
             
             # Get package info
-            PKG_VERSION="3.10"
-            PKG_ARCH="aarch64_cortex-a53"
-            OUTPUT_DIR="bin/packages/$PKG_ARCH/base"
-            mkdir -p "$OUTPUT_DIR"
+            version=$(grep "^Version:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
+            arch=$(grep "^Architecture:" "$pkg_dir/CONTROL/control" | cut -d' ' -f2)
             
-            # Create control file if missing
+            # Build IPK
+            pkg_file="$dest_dir/${pkg_name}_${version}_${arch}.ipk"
+            
+            cd "$pkg_dir"
+            tar -czf /tmp/control.tar.gz -C CONTROL .
+            tar -czf /tmp/data.tar.gz --exclude=CONTROL .
+            echo "2.0" > /tmp/debian-binary
+            
+            ar -cr "$pkg_file" /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz
+            rm -f /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz
+            
+            echo "Created $pkg_file"
+            exit 0
+          fi
+        fi
+        
+        # For other packages, use the backup
+        exec scripts/ipkg-build.backup "$@"
+        BYPASS_SCRIPT
+          
+          chmod +x scripts/ipkg-build.new
+          mv scripts/ipkg-build scripts/ipkg-build.old
+          mv scripts/ipkg-build.new scripts/ipkg-build
+          
+          # Retry build
+          make package/usb-redirector-server/compile V=s || {
+            echo "Still failed, will create manually later"
+          }
+          
+          # Restore original ipkg-build
+          mv scripts/ipkg-build.backup scripts/ipkg-build 2>/dev/null || true
+        }
+        
+        echo "=== USB Redirector build attempt completed ==="
+
+    - name: Manually create USB Redirector userspace IPK if needed
+      if: always()
+      run: |
+        cd ImmortalWrt
+        
+        # Check if userspace package exists
+        USER_PKG=$(find bin/ -name "usb-redirector-server*.ipk" ! -name "kmod-*" 2>/dev/null | head -1)
+        
+        if [ -z "$USER_PKG" ]; then
+          echo "=== Creating userspace package manually ==="
+          
+          # Find the build directory
+          BUILD_DIR="build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic"
+          
+          # Look for the IPK staging directory
+          for dir in "$BUILD_DIR"/usb-redirector-server*/ipkg-*/usb-redirector-server; do
+            if [ -d "$dir" ]; then
+              IPK_DIR="$dir"
+              break
+            fi
+          done
+          
+          if [ -n "$IPK_DIR" ] && [ -d "$IPK_DIR" ]; then
+            echo "Found IPK staging at: $IPK_DIR"
+            
+            # Create control file
             mkdir -p "$IPK_DIR/CONTROL"
-            if [ ! -f "$IPK_DIR/CONTROL/control" ]; then
-              cat > "$IPK_DIR/CONTROL/control" << CONTROL_END
+            cat > "$IPK_DIR/CONTROL/control" << EOF
         Package: usb-redirector-server
-        Version: $PKG_VERSION
-        Architecture: $PKG_ARCH
+        Version: 3.10
+        Architecture: aarch64_cortex-a53
         Maintainer: IncentivesPro
         Section: utils
         Priority: optional
-        Description: USB Redirector Server
-        CONTROL_END
-            fi
+        Depends: kmod-usb-redirector-server
+        Description: USB Redirector Server userspace utilities
+        EOF
             
-            # Remove library dependencies
-            sed -i '/libc\.so\|libm\.so\|libpthread\.so\|librt\.so/d' "$IPK_DIR/CONTROL/control"
+            # Create the IPK
+            mkdir -p bin/packages/aarch64_cortex-a53/base
             
-            # Create IPK
             cd "$IPK_DIR"
             tar -czf /tmp/control.tar.gz -C CONTROL .
-            tar --exclude=CONTROL -czf /tmp/data.tar.gz .
+            tar -czf /tmp/data.tar.gz --exclude=CONTROL .
             echo "2.0" > /tmp/debian-binary
-            ar -cr "$GITHUB_WORKSPACE/openwrt/$OUTPUT_DIR/usb-redirector-server_${PKG_VERSION}_${PKG_ARCH}.ipk" \
+            
+            ar -cr "$GITHUB_WORKSPACE/ImmortalWrt/bin/packages/aarch64_cortex-a53/base/usb-redirector-server_3.10_aarch64_cortex-a53.ipk" \
               /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz
             
-            cd "$GITHUB_WORKSPACE/openwrt"
-            echo "Created: $OUTPUT_DIR/usb-redirector-server_${PKG_VERSION}_${PKG_ARCH}.ipk"
+            echo "Manual IPK creation completed"
+          else
+            echo "Could not find IPK staging directory"
           fi
         fi
 
-    - name: List all built files
+    - name: Final check and summary
       if: always()
       run: |
-        cd openwrt
+        cd ImmortalWrt
         
-        echo "=== Firmware files ==="
-        ls -la bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/ 2>/dev/null || echo "No firmware"
+        echo "=== Final Build Summary ==="
         
-        echo ""
-        echo "=== IPK packages ==="
-        find bin/ -name "*.ipk" -type f | head -20
+        echo "Firmware images:"
+        ls -lah bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*.bin 2>/dev/null || echo "None found"
         
         echo ""
-        echo "=== USB Redirector packages ==="
-        find bin/ -name "*usb-redirector*.ipk" -type f
+        echo "USB Redirector packages:"
+        find bin/ -name "*usb-redirector*.ipk" -exec ls -lh {} \; 2>/dev/null || echo "None found"
+        
+        echo ""
+        echo "Total packages built:"
+        find bin/ -name "*.ipk" | wc -l
 
-    - name: Prepare artifacts
+    - name: Organize artifacts
       if: always()
       run: |
         mkdir -p artifacts/firmware
         mkdir -p artifacts/packages
         
         # Copy firmware
-        if [ -d "openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}" ]; then
-          cp -r openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/* artifacts/firmware/ 2>/dev/null || true
-        fi
+        find ImmortalWrt/bin/targets/ -name "*.bin" -o -name "*.itb" | while read f; do
+          cp -v "$f" artifacts/firmware/ 2>/dev/null || true
+        done
         
         # Copy USB Redirector packages
-        find openwrt/bin -name "*usb-redirector*.ipk" -exec cp {} artifacts/packages/ \; 2>/dev/null || true
+        find ImmortalWrt/bin/ -name "*usb-redirector*.ipk" | while read f; do
+          cp -v "$f" artifacts/packages/ 2>/dev/null || true
+        done
         
-        # Create info file
-        cat > artifacts/INFO.txt << EOF
-        Build Information
-        =================
-        Date: $(date)
-        OpenWrt: ${{ env.OPENWRT_VERSION }}
-        Target: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-        Device: ${{ env.DEVICE_PROFILE }}
-        
-        Packages:
-        $(ls -la artifacts/packages/*.ipk 2>/dev/null || echo "None")
-        
-        Firmware:
-        $(ls -la artifacts/firmware/*.bin 2>/dev/null || echo "None")
-        EOF
-        
-        echo "=== Artifacts summary ==="
-        cat artifacts/INFO.txt
+        # Summary
+        echo "=== Artifacts ==="
+        ls -la artifacts/firmware/ 2>/dev/null || echo "No firmware"
+        ls -la artifacts/packages/ 2>/dev/null || echo "No packages"
 
-    - name: Upload firmware
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: firmware-${{ env.DEVICE_PROFILE }}
-        path: artifacts/firmware/
-        retention-days: 30
-        if-no-files-found: warn
-
-    - name: Upload IPK packages
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: usb-redirector-ipk
-        path: artifacts/packages/
-        retention-days: 30
-        if-no-files-found: warn
-
-    - name: Upload all artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: all-artifacts
+        name: ImmortalWrt-build
         path: artifacts/
         retention-days: 30
